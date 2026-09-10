@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: careplus
+          POSTGRES_PASSWORD: careplus_pw
+          POSTGRES_DB: careplus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U careplus -d careplus_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://careplus:careplus_pw@localhost:5432/careplus_test?schema=public
+      REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: test_access_secret_min_32_characters_long
+      JWT_REFRESH_SECRET: test_refresh_secret_min_32_characters_long
+      PASSWORD_RESET_SECRET: test_reset_secret_min_32_characters_long
+      FRONTEND_URL: http://localhost:5173
+      PLAYWRIGHT_API_URL: http://127.0.0.1:4000/api/v1
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            careplus-backend/package-lock.json
+            careplus-frontend/package-lock.json
+      - name: Install backend dependencies
+        working-directory: careplus-backend
+        run: npm ci
+      - name: Install frontend dependencies
+        working-directory: careplus-frontend
+        run: npm ci
+      - name: Prepare test database
+        working-directory: careplus-backend
+        run: npm run prisma:deploy && npm run prisma:seed
+      - name: Build backend
+        working-directory: careplus-backend
+        run: npm run build
+      - name: Backend unit and integration tests
+        working-directory: careplus-backend
+        run: npm test
+      - name: Install Playwright browser
+        working-directory: careplus-frontend
+        run: npx playwright install --with-deps chromium
+      - name: Build frontend
+        working-directory: careplus-frontend
+        run: npm run build
+      - name: End-to-end tests
+        working-directory: careplus-frontend
+        run: npm run e2e

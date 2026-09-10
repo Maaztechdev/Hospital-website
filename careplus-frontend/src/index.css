@@ -1,0 +1,203 @@
+@import "tailwindcss";
+
+@theme {
+  /* ===== Color tokens ===== */
+  --color-primary: #1769AA;
+  --color-primary-dark: #0F4C7A;
+  --color-primary-light: #E3EFF8;
+
+  --color-accent: #0F9D8A;
+  --color-accent-dark: #0B7A6B;
+  --color-accent-light: #E1F5F1;
+
+  --color-emergency: #FF6B5E;
+  --color-emergency-dark: #E14F42;
+  --color-emergency-light: #FFEBE9;
+
+  --color-bg: #F7FAFC;
+  --color-surface: #FFFFFF;
+
+  --color-ink: #0E1F2E;
+  --color-ink-soft: #4B6072;
+  --color-ink-faint: #8296A6;
+
+  --color-border-soft: #E1E9F0;
+
+  /* ===== Type ===== */
+  --font-display: "Sora", "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-data: "Inter", system-ui, sans-serif;
+
+  /* ===== Radius ===== */
+  --radius-card: 1rem;
+  --radius-lg: 1.25rem;
+
+  /* ===== Shadows (tinted, two-layer feel via utilities below) ===== */
+  --shadow-color: 23 105 170;
+
+  /* ===== Spacing scale additions ===== */
+  --spacing-section: 6rem;
+  --spacing-section-sm: 3.5rem;
+
+  --animate-pulse-glow: pulse-glow 2.4s ease-in-out infinite;
+  --animate-heartbeat-draw: heartbeat-draw 2.8s ease-in-out infinite;
+  --animate-bounce-once: bounce-once 1.1s ease-in-out 1;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+    color: var(--color-ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer utilities {
+  .shadow-care {
+    box-shadow:
+      0 1px 2px rgba(23, 105, 170, 0.06),
+      0 8px 24px -8px rgba(23, 105, 170, 0.12),
+      0 2px 6px -2px rgba(23, 105, 170, 0.08);
+  }
+  .shadow-care-hover {
+    box-shadow:
+      0 2px 4px rgba(23, 105, 170, 0.08),
+      0 16px 36px -10px rgba(23, 105, 170, 0.2),
+      0 4px 10px -2px rgba(15, 157, 138, 0.12);
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(15, 157, 138, 0.35); }
+  50% { box-shadow: 0 0 0 8px rgba(15, 157, 138, 0); }
+}
+
+@keyframes heartbeat-draw {
+  0% { stroke-dashoffset: 1000; }
+  70% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes bounce-once {
+  0% { transform: translateY(0); }
+  20% { transform: translateY(-14px); }
+  40% { transform: translateY(0); }
+  55% { transform: translateY(-7px); }
+  70% { transform: translateY(0); }
+  100% { transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white !important; }
+  * { animation: none !important; box-shadow: none !important; color: black !important; }
+}
+
+/* =========================================================
+   Khalida Medicare Dashboard (Phase 2) design tokens
+   A distinct clinical-but-warm system, separate from the
+   public-site palette above so both can be themed independently.
+   ========================================================= */
+@theme {
+  /* Core surfaces */
+  --cp-bg: #F5F8F7;
+  --cp-surface: #FFFFFF;
+  --cp-surface-warm: #FBF9F4;
+  --cp-sidebar: #0D3B37;
+  --cp-sidebar-hover: #124A44;
+  --cp-sidebar-active: #17615A;
+
+  /* Brand */
+  --cp-primary: #0E5C56;
+  --cp-primary-dark: #093F3B;
+  --cp-primary-light: #E3F2EF;
+  --cp-accent: #B8842E;
+  --cp-accent-light: #FBF1E1;
+
+  /* Ink */
+  --cp-ink: #12231F;
+  --cp-ink-soft: #52655F;
+  --cp-ink-faint: #8CA098;
+  --cp-border: #E1E9E6;
+  --cp-border-strong: #C9D6D2;
+
+  /* Semantic status — used everywhere: badges, strips, charts, alerts */
+  --cp-success: #1A8754;
+  --cp-success-light: #E6F5EC;
+  --cp-warning: #B7791F;
+  --cp-warning-light: #FCF1DD;
+  --cp-critical: #C0392B;
+  --cp-critical-light: #FBEAE8;
+  --cp-info: #2A67A6;
+  --cp-info-light: #E8F1FA;
+  --cp-neutral: #64748B;
+  --cp-neutral-light: #F1F4F3;
+
+  --font-tabular: "Inter", system-ui, sans-serif;
+
+  --animate-cp-pulse: cp-pulse 1.6s ease-in-out infinite;
+  --animate-cp-fade-in: cp-fade-in 0.18s ease-out;
+  --animate-cp-slide-in: cp-slide-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-cp-glow-critical: cp-glow-critical 1.8s ease-in-out infinite;
+}
+
+@layer utilities {
+  .cp-tabular { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+  .cp-shadow { box-shadow: 0 1px 2px rgba(14, 92, 86, 0.06), 0 8px 20px -10px rgba(14, 92, 86, 0.18); }
+  .cp-shadow-hover { box-shadow: 0 4px 10px -2px rgba(14, 92, 86, 0.12), 0 16px 32px -12px rgba(14, 92, 86, 0.24); }
+  .cp-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+  .cp-scrollbar::-webkit-scrollbar-thumb { background: var(--cp-border-strong); border-radius: 999px; }
+}
+
+@keyframes cp-pulse {
+  0%, 100% { background-color: var(--cp-accent-light); }
+  50% { background-color: var(--cp-warning-light); }
+}
+
+@keyframes cp-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes cp-slide-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes cp-glow-critical {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(192, 57, 43, 0.08); }
+}
+
+@media print {
+  .cp-print-hide { display: none !important; }
+}
