@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Request, Response, Router } from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@config/prisma";
-import { BadRequestError, ConflictError, NotFoundError, UnauthorizedError } from "@common/errors/AppError";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from "@common/errors/AppError";
 import { writeAuditLog } from "@common/utils/auditLog";
 import { notifyUser } from "@common/utils/notify";
 import { AccessTokenPayload, authenticate } from "@common/middleware/authenticate";
@@ -18,10 +18,29 @@ const scheduleSurgerySchema = z.object({
   patientId: z.string().uuid(),
   otRoomId: z.string().uuid(),
   surgeryType: z.string().min(1),
+  priority: z.enum(["ELECTIVE", "URGENT", "EMERGENCY"]).default("ELECTIVE"),
+  anesthesiaType: z.string().trim().min(1).max(100).optional(),
   surgeonId: z.string().uuid(),
+  assistantSurgeonId: z.string().uuid().optional(),
   anesthetistId: z.string().uuid().optional(),
   scheduledStart: z.string().datetime(),
   scheduledEnd: z.string().datetime(),
+  notes: z.string().max(2000).optional(),
+  preOpChecklist: z.object({
+    consentSigned: z.boolean(),
+    npoConfirmed: z.boolean(),
+    labsDone: z.boolean(),
+    bloodArranged: z.boolean(),
+  }).optional(),
+});
+
+const availabilityQuerySchema = scheduleSurgerySchema.pick({
+  patientId: true,
+  otRoomId: true,
+  surgeonId: true,
+  scheduledStart: true,
+  scheduledEnd: true,
+  priority: true,
 });
 
 const checklistSchema = z.object({
@@ -40,6 +59,8 @@ const completeSurgerySchema = z.object({
 });
 
 const idParamSchema = z.object({ id: z.string().uuid() });
+const roomInputSchema = z.object({ name: z.string().trim().min(1), isActive: z.boolean().default(true) });
+const roomsQuerySchema = z.object({ includeInactive: z.enum(["true", "false"]).optional() });
 
 // ── Service ─────────────────────────────────────────────────
 
@@ -47,15 +68,121 @@ const REQUIRED_CHECKLIST_KEYS = [
   "consent_form_confirmed",
   "fasting_confirmed",
   "blood_arranged",
-  "identity_verified",
-  "allergies_checked",
-  "pre_op_vitals_recorded",
   "required_reports_reviewed",
 ];
 
+const serializeRoom = (room: { id: string; roomName: string; isActive: boolean }) => ({ id: room.id, name: room.roomName, isActive: room.isActive });
+const serializeSurgery = <T extends { otRoom: { roomName: string } }>(surgery: T) => {
+  const { roomName, ...room } = surgery.otRoom;
+  return { ...surgery, otRoom: { ...room, name: roomName } };
+};
+
+function validateScheduleWindow(input: Pick<z.infer<typeof scheduleSurgerySchema>, "scheduledStart" | "scheduledEnd" | "priority">) {
+  const start = new Date(input.scheduledStart);
+  const end = new Date(input.scheduledEnd);
+  const duration = end.getTime() - start.getTime();
+  if (duration <= 0 || duration % (15 * 60_000) !== 0) {
+    throw new ValidationError("Surgery duration must be a positive multiple of 15 minutes");
+  }
+  if (start.getTime() < Date.now()) throw new ValidationError("Surgery cannot be scheduled in the past");
+
+  if (input.priority !== "EMERGENCY") {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Karachi",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(start);
+    const hour = Number(parts.find((part) => part.type === "hour")?.value);
+    const minute = Number(parts.find((part) => part.type === "minute")?.value);
+    const startMinutes = hour * 60 + minute;
+    const endParts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Karachi",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(end);
+    const endMinutes = Number(endParts.find((part) => part.type === "hour")?.value) * 60
+      + Number(endParts.find((part) => part.type === "minute")?.value);
+    if (startMinutes < 8 * 60 || endMinutes > 20 * 60 || endMinutes <= startMinutes) {
+      throw new ValidationError("Only Emergency surgeries may be scheduled outside 08:00-20:00 Pakistan time");
+    }
+  }
+  return { start, end };
+}
+
+type ScheduleConflict = {
+  kind: "room" | "surgeon" | "patient";
+  surgery: {
+    surgeryType: string;
+    scheduledStart: Date;
+    patient: { firstName: string; lastName: string };
+    otRoom: { roomName: string };
+    surgeon: { user: { name: string } };
+  };
+};
+
+async function findScheduleConflict(input: {
+  patientId: string;
+  otRoomId: string;
+  surgeonId: string;
+  scheduledStart: Date;
+  scheduledEnd: Date;
+}): Promise<ScheduleConflict | null> {
+  const activeStatuses: Prisma.EnumOTStatusFilter<"Surgery"> = { notIn: ["CANCELLED", "COMPLETED"] };
+  const timeOverlap = {
+    status: activeStatuses,
+    scheduledStart: { lt: input.scheduledEnd },
+    scheduledEnd: { gt: input.scheduledStart },
+  };
+  const include = {
+    patient: { select: { firstName: true, lastName: true } },
+    otRoom: { select: { roomName: true } },
+    surgeon: { select: { user: { select: { name: true } } } },
+  } satisfies Prisma.SurgeryInclude;
+  const [room, surgeon, patient] = await Promise.all([
+    prisma.surgery.findFirst({ where: { ...timeOverlap, otRoomId: input.otRoomId }, include }),
+    prisma.surgery.findFirst({ where: { ...timeOverlap, surgeonId: input.surgeonId }, include }),
+    prisma.surgery.findFirst({ where: { ...timeOverlap, patientId: input.patientId }, include }),
+  ]);
+  if (room) return { kind: "room", surgery: room };
+  if (surgeon) return { kind: "surgeon", surgery: surgeon };
+  if (patient) return { kind: "patient", surgery: patient };
+  return null;
+}
+
 const otService = {
-  async listRooms() {
-    return prisma.otRoom.findMany({ where: { isActive: true } });
+  async listRooms(includeInactive = false) {
+    const rooms = await prisma.otRoom.findMany({ where: includeInactive ? {} : { isActive: true }, orderBy: { roomName: "asc" } });
+    return rooms.map(serializeRoom);
+  },
+
+  async createRoom(actor: AccessTokenPayload, input: { name: string; isActive: boolean }, req?: Request) {
+    const duplicate = await prisma.otRoom.findFirst({ where: { roomName: input.name } });
+    if (duplicate) throw new ConflictError("OT room name must be unique");
+    const room = await prisma.otRoom.create({ data: { roomName: input.name, isActive: input.isActive } });
+    await writeAuditLog({ userId: actor.sub, action: "CREATE", module: "ot", entityType: "OtRoom", entityId: room.id, newValues: room, req });
+    return serializeRoom(room);
+  },
+
+  async updateRoom(actor: AccessTokenPayload, id: string, input: { name: string; isActive: boolean }, req?: Request) {
+    const existing = await prisma.otRoom.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundError("OT room not found");
+    const duplicate = await prisma.otRoom.findFirst({ where: { roomName: input.name, NOT: { id } } });
+    if (duplicate) throw new ConflictError("OT room name must be unique");
+    const room = await prisma.otRoom.update({ where: { id }, data: { roomName: input.name, isActive: input.isActive } });
+    await writeAuditLog({ userId: actor.sub, action: "UPDATE", module: "ot", entityType: "OtRoom", entityId: id, oldValues: existing, newValues: room, req });
+    return serializeRoom(room);
+  },
+
+  async deleteRoom(actor: AccessTokenPayload, id: string, req?: Request) {
+    const existing = await prisma.otRoom.findUnique({ where: { id }, include: { surgeries: { select: { id: true } } } });
+    if (!existing) throw new NotFoundError("OT room not found");
+    const room = existing.surgeries.length
+      ? await prisma.otRoom.update({ where: { id }, data: { isActive: false } })
+      : await prisma.otRoom.delete({ where: { id } });
+    await writeAuditLog({ userId: actor.sub, action: "DELETE", module: "ot", entityType: "OtRoom", entityId: id, oldValues: existing, newValues: room, req });
+    return serializeRoom(room);
   },
 
   async list(actor: AccessTokenPayload, params: { skip: number; limit: number; status?: string; otRoomId?: string; date?: string }) {
@@ -77,47 +204,54 @@ const otService = {
       prisma.surgery.findMany({ where, skip: params.skip, take: params.limit, include: { patient: true, otRoom: true, surgeon: { include: { user: true } } }, orderBy: { scheduledStart: "asc" } }),
       prisma.surgery.count({ where }),
     ]);
-    return { items, total };
+    return { items: items.map(serializeSurgery), total };
   },
 
   async getById(actor: AccessTokenPayload, id: string) {
-    const surgery = await prisma.surgery.findUnique({ where: { id }, include: { patient: true, otRoom: true, surgeon: { include: { user: true } }, anesthetist: { include: { user: true } } } });
+    const surgery = await prisma.surgery.findUnique({ where: { id }, include: { patient: true, otRoom: true, surgeon: { include: { user: true } }, assistantSurgeon: { include: { user: true } }, anesthetist: { include: { user: true } } } });
     if (!surgery) throw new NotFoundError("Surgery not found");
     await assertDoctorOwns(actor, surgery.surgeonId);
-    return surgery;
+    return serializeSurgery(surgery);
   },
 
   /** Schedules surgery, checking for OT room and surgeon double-booking within the same window. */
   async schedule(actor: AccessTokenPayload, input: z.infer<typeof scheduleSurgerySchema>, req?: Request) {
-    const start = new Date(input.scheduledStart);
-    const end = new Date(input.scheduledEnd);
-    if (end <= start) throw new BadRequestError("scheduledEnd must be after scheduledStart");
-    await assertDoctorOwns(actor, input.surgeonId);
+    const { start, end } = validateScheduleWindow(input);
+    await assertDoctorOwns(actor, input.surgeonId, "You can only schedule surgeries for yourself");
     await assertPatientAccess(actor, input.patientId);
 
-    const overlapWhere = (field: "otRoomId" | "surgeonId", value: string): Prisma.SurgeryWhereInput => ({
-      [field]: value,
-      status: { notIn: ["CANCELLED", "COMPLETED"] },
-      scheduledStart: { lt: end },
-      scheduledEnd: { gt: start },
-    });
-
-    const [roomConflict, surgeonConflict] = await Promise.all([
-      prisma.surgery.findFirst({ where: overlapWhere("otRoomId", input.otRoomId) }),
-      prisma.surgery.findFirst({ where: overlapWhere("surgeonId", input.surgeonId) }),
-    ]);
-    if (roomConflict) throw new ConflictError("OT room is already booked for an overlapping time window");
-    if (surgeonConflict) throw new ConflictError("Surgeon already has an overlapping surgery scheduled");
+    const conflict = await findScheduleConflict({ ...input, scheduledStart: start, scheduledEnd: end });
+    if (conflict) {
+      const messages = {
+        room: `${conflict.surgery.otRoom.roomName} is already booked at that time`,
+        surgeon: "Surgeon already has an overlapping surgery scheduled",
+        patient: "Patient already has an overlapping surgery scheduled",
+      };
+      throw new ConflictError(messages[conflict.kind]);
+    }
 
     const surgery = await prisma.surgery.create({
       data: {
         patientId: input.patientId,
         otRoomId: input.otRoomId,
         surgeryType: input.surgeryType,
+        priority: input.priority,
+        anesthesiaType: input.anesthesiaType,
         surgeonId: input.surgeonId,
+        assistantSurgeonId: input.assistantSurgeonId,
         anesthetistId: input.anesthetistId,
         scheduledStart: start,
         scheduledEnd: end,
+        notes: input.notes,
+        preOpChecklistJson: {
+          consent_form_confirmed: input.preOpChecklist?.consentSigned ?? false,
+          fasting_confirmed: input.preOpChecklist?.npoConfirmed ?? false,
+          required_reports_reviewed: input.preOpChecklist?.labsDone ?? false,
+          blood_arranged: input.preOpChecklist?.bloodArranged ?? false,
+          identity_verified: false,
+          allergies_checked: false,
+          pre_op_vitals_recorded: false,
+        },
         createdBy: actor.sub,
       },
     });
@@ -140,9 +274,19 @@ const otService = {
     return updated;
   },
 
+  async markPreOp(actor: AccessTokenPayload, id: string, req?: Request) {
+    const surgery = await prisma.surgery.findUnique({ where: { id } });
+    if (!surgery) throw new NotFoundError("Surgery not found");
+    await assertDoctorOwns(actor, surgery.surgeonId);
+    if (surgery.status !== "SCHEDULED") throw new ConflictError(`Cannot move surgery to pre-op from status ${surgery.status}`);
+    const updated = await prisma.surgery.update({ where: { id }, data: { status: "PRE_OP" } });
+    await writeAuditLog({ userId: actor.sub, action: "STATUS_CHANGE", module: "ot", entityType: "Surgery", entityId: id, newValues: { status: "PRE_OP" }, req });
+    return updated;
+  },
+
   /** Cannot start surgery (move to IN_PROGRESS) unless all checklist items are true. */
   async start(actor: AccessTokenPayload, id: string, req?: Request) {
-    const surgery = await prisma.surgery.findUnique({ where: { id } });
+    const surgery = await prisma.surgery.findUnique({ where: { id }, include: { surgeon: true } });
     if (!surgery) throw new NotFoundError("Surgery not found");
     await assertDoctorOwns(actor, surgery.surgeonId);
     if (!["SCHEDULED", "PRE_OP"].includes(surgery.status)) {
@@ -153,13 +297,13 @@ const otService = {
     const incomplete = REQUIRED_CHECKLIST_KEYS.filter((k) => !checklist?.[k]);
     if (incomplete.length > 0) {
       await notifyUser({
-        userId: surgery.surgeonId, // note: surgeonId is a Doctor id, not User id — kept as informational log target via doctor lookup below
+        userId: surgery.surgeon.userId,
         notificationType: "OT_CHECKLIST_INCOMPLETE",
         title: "Pre-op checklist incomplete",
         message: `Cannot start surgery — missing: ${incomplete.join(", ")}`,
         relatedEntityType: "Surgery",
         relatedEntityId: id,
-      }).catch(() => undefined); // best-effort notify; surgeonId->userId resolution handled in production notification fan-out
+      });
       throw new ConflictError(`Pre-op checklist incomplete: ${incomplete.join(", ")}`);
     }
 
@@ -212,7 +356,19 @@ const otService = {
 const router = Router();
 router.use(authenticate);
 
-router.get("/rooms", asyncHandler(async (_req: Request, res: Response) => sendSuccess(res, 200, { data: await otService.listRooms() })));
+router.get("/rooms", validate({ query: roomsQuerySchema }), asyncHandler(async (req: Request, res: Response) => sendSuccess(res, 200, { data: await otService.listRooms(req.query.includeInactive === "true") })));
+router.post("/rooms", requireRole(["ADMIN"]), validate({ body: roomInputSchema }), asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user) throw new UnauthorizedError();
+  sendSuccess(res, 201, { data: await otService.createRoom(req.user, req.body, req), message: "OT room created" });
+}));
+router.patch("/rooms/:id", requireRole(["ADMIN"]), validate({ params: idParamSchema, body: roomInputSchema }), asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user) throw new UnauthorizedError();
+  sendSuccess(res, 200, { data: await otService.updateRoom(req.user, req.params.id, req.body, req), message: "OT room updated" });
+}));
+router.delete("/rooms/:id", requireRole(["ADMIN"]), validate({ params: idParamSchema }), asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user) throw new UnauthorizedError();
+  sendSuccess(res, 200, { data: await otService.deleteRoom(req.user, req.params.id, req), message: "OT room removed" });
+}));
 
 router.get(
   "/surgeries",
@@ -224,6 +380,36 @@ router.get(
     if (!req.user) throw new UnauthorizedError();
     const { items, total } = await otService.list(req.user, { skip: (page - 1) * limit, limit, status, otRoomId, date });
     sendSuccess(res, 200, { data: items, pagination: { page, limit, total } });
+  })
+);
+
+router.get(
+  "/surgeries/availability",
+  requireRole(["ADMIN", "DOCTOR"]),
+  validate({ query: availabilityQuerySchema }),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const input = req.query as z.infer<typeof availabilityQuerySchema>;
+    const { start, end } = validateScheduleWindow(input);
+    if (req.user.role === "DOCTOR" && (await getActorDoctorId(req.user)) !== input.surgeonId) {
+      throw new ForbiddenError("You can only check availability for your own surgeries");
+    }
+    await assertPatientAccess(req.user, input.patientId);
+    const conflict = await findScheduleConflict({ ...input, scheduledStart: start, scheduledEnd: end });
+    sendSuccess(res, 200, {
+      data: conflict
+        ? {
+            available: false,
+            message: conflict.kind === "room"
+              ? `${conflict.surgery.otRoom.roomName} is already booked`
+              : conflict.kind === "surgeon"
+                ? `${conflict.surgery.surgeon.user.name} has another surgery at this time`
+                : `${conflict.surgery.patient.firstName} ${conflict.surgery.patient.lastName} is already booked`,
+            surgeryType: conflict.surgery.surgeryType,
+            scheduledStart: conflict.surgery.scheduledStart,
+          }
+        : { available: true },
+    });
   })
 );
 
@@ -249,6 +435,16 @@ router.patch(
   asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
     sendSuccess(res, 200, { data: await otService.updateChecklist(req.user, req.params.id, req.body, req), message: "Checklist updated" });
+  })
+);
+
+router.post(
+  "/surgeries/:id/pre-op",
+  requireRole(["ADMIN", "DOCTOR"]),
+  validate({ params: idParamSchema }),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    sendSuccess(res, 200, { data: await otService.markPreOp(req.user, req.params.id, req), message: "Surgery moved to pre-op" });
   })
 );
 

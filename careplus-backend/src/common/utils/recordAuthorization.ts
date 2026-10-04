@@ -9,16 +9,7 @@ export async function getActorDoctorId(actor: AccessTokenPayload): Promise<strin
   return doctor.id;
 }
 
-export async function assertDoctorOwns(actor: AccessTokenPayload, doctorId: string | null | undefined): Promise<void> {
-  if (actor.role !== "DOCTOR") return;
-  const actorDoctorId = await getActorDoctorId(actor);
-  if (actorDoctorId !== doctorId) throw new ForbiddenError("You are not authorized to access this record");
-}
-
-export async function assertPatientAccess(actor: AccessTokenPayload, patientId: string): Promise<void> {
-  if (actor.role !== "DOCTOR") return;
-  const doctorId = await getActorDoctorId(actor);
-  if (!doctorId) throw new ForbiddenError("Doctor profile not found");
+async function doctorHasPatientAccess(doctorId: string, patientId: string): Promise<boolean> {
   const access = await prisma.patient.findFirst({
     where: {
       id: patientId,
@@ -34,5 +25,39 @@ export async function assertPatientAccess(actor: AccessTokenPayload, patientId: 
     },
     select: { id: true },
   });
-  if (!access) throw new ForbiddenError("You are not authorized to access this patient");
+  return access !== null;
+}
+
+export async function assertDoctorOwns(
+  actor: AccessTokenPayload,
+  doctorId: string | null | undefined,
+  message = "You are not authorized to access this record",
+): Promise<void> {
+  if (actor.role !== "DOCTOR") return;
+  const actorDoctorId = await getActorDoctorId(actor);
+  if (actorDoctorId !== doctorId) throw new ForbiddenError(message);
+}
+
+export async function assertDoctorCanAdmitPatient(
+  actor: AccessTokenPayload,
+  patientId: string,
+  attendingDoctorId: string,
+): Promise<void> {
+  if (actor.role !== "DOCTOR") return;
+
+  const doctorId = await getActorDoctorId(actor);
+  if (!doctorId) throw new ForbiddenError("Doctor profile not found");
+  if (doctorId === attendingDoctorId) return;
+  if (!(await doctorHasPatientAccess(doctorId, patientId))) {
+    throw new ForbiddenError("Doctors can only admit patients under their own name");
+  }
+}
+
+export async function assertPatientAccess(actor: AccessTokenPayload, patientId: string): Promise<void> {
+  if (actor.role !== "DOCTOR") return;
+  const doctorId = await getActorDoctorId(actor);
+  if (!doctorId) throw new ForbiddenError("Doctor profile not found");
+  if (!(await doctorHasPatientAccess(doctorId, patientId))) {
+    throw new ForbiddenError("You are not authorized to access this patient");
+  }
 }

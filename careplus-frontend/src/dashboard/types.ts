@@ -1,11 +1,17 @@
 // Shared domain types for the Khalida Medicare Admin & Staff Management System (Phase 2).
 // Frontend-only mock domain model — no backend contracts implied.
+import { APPOINTMENT_STATUSES, APPOINTMENT_STATUS_LABELS, type AppointmentStatus } from "../../../careplus-backend/src/modules/appointments/appointmentStatus"
+
+export { APPOINTMENT_STATUSES, APPOINTMENT_STATUS_LABELS }
+export type { AppointmentStatus }
 
 export type Role =
   | "admin"
+  | "billing_manager"
   | "receptionist"
   | "doctor"
   | "lab_technician"
+  | "ultrasound_tech"
   | "ultrasound_technician"
   | "radiologist"
   | "pharmacist"
@@ -13,9 +19,11 @@ export type Role =
 
 export const ROLE_LABELS: Record<Role, string> = {
   admin: "Administrator",
+  billing_manager: "Billing Manager",
   receptionist: "Receptionist",
   doctor: "Doctor",
   lab_technician: "Lab Technician",
+  ultrasound_tech: "Ultrasound Technician",
   ultrasound_technician: "Ultrasound Technician",
   radiologist: "Radiologist",
   pharmacist: "Pharmacist",
@@ -29,7 +37,6 @@ export interface Patient {
   id?: string
   mrNumber: string
   name: string
-  dob: string // ISO date
   age: number
   gender: Gender
   phone: string
@@ -39,21 +46,13 @@ export interface Patient {
   bloodGroup: BloodGroup
   allergies: string[]
   emergencyContact: string
+  emergencyContactName?: string
   notes?: string
   registeredAt: string // ISO datetime
   lastVisit?: string
   balance: number
   status: "Active" | "Inactive"
 }
-
-export type AppointmentStatus =
-  | "Pending Approval"
-  | "Confirmed"
-  | "Waiting"
-  | "In Consultation"
-  | "Done"
-  | "Cancelled"
-  | "No-show"
 
 export type Priority = "Routine" | "Urgent" | "Emergency"
 
@@ -62,6 +61,8 @@ export interface Appointment {
   token: number
   mrNumber: string
   patientName: string
+  age?: number
+  gender?: Gender
   doctorId: string
   doctorName: string
   department: string
@@ -71,6 +72,7 @@ export interface Appointment {
   status: AppointmentStatus
   priority: Priority
   reason?: string
+  chiefComplaint?: string
   rejectionReason?: string
   createdAt: string
   waitingSince?: string // ISO datetime, set when status becomes Waiting
@@ -78,6 +80,7 @@ export interface Appointment {
 
 export interface Doctor {
   id: string
+  userId?: string
   name: string
   department: string
   designation: string
@@ -108,21 +111,34 @@ export interface TimelineEvent {
 }
 
 export interface VitalSigns {
-  bp: string
+  systolic: string
+  diastolic: string
   temperature: string
+  temperatureUnit: "F" | "C"
   pulse: string
   weight: string
   spo2: string
+  respiratoryRate: string
+  heightCm: string
 }
 
 export interface PrescriptionItem {
   id: string
   medicineId?: string
   medicine: string
-  dosage: string
+  genericName?: string
+  doseAmount?: string
+  doseUnit?: string
   route: string
-  frequency: string
-  duration: string
+  frequencyCode?: string
+  legacyFrequency?: string
+  durationValue?: string
+  durationUnit?: "days" | "weeks" | "months"
+  legacyDosage?: string
+  legacyDuration?: string
+  dosage?: string
+  frequency?: string
+  duration?: string
   instructions?: string
 }
 
@@ -138,6 +154,7 @@ export interface Consultation {
   chiefComplaint: string
   clinicalNotes: string
   diagnosis: string
+  diagnosisCode?: string
   prescriptions: PrescriptionItem[]
   labRecommendations: string[]
   followUpDate?: string
@@ -146,7 +163,7 @@ export interface Consultation {
   signedAt?: string
 }
 
-export type LabOrderStatus = "Ordered" | "Sample Collected" | "Processing" | "Completed" | "Verified"
+export type LabOrderStatus = "Ordered" | "Sample Collected" | "Processing" | "Completed" | "Verified" | "Cancelled"
 export type LabInterpretation = "Normal" | "High" | "Low" | "Critical"
 
 export interface LabOrder {
@@ -208,6 +225,7 @@ export interface Payment {
   amount: number
   method: "Cash" | "Card" | "Bank Transfer" | "Mobile Wallet"
   date: string
+  receivedBy?: string
   notes?: string
 }
 
@@ -262,7 +280,7 @@ export interface Bed {
 }
 
 export type AdmissionStatus = "Admitted" | "Discharged" | "Transferred Out"
-export type AdmissionType = "Emergency" | "Planned" | "Referral"
+export type AdmissionType = "Emergency" | "Planned" | "Referral" | "Transfer" | "Day care"
 
 export interface Admission {
   id: string
@@ -277,6 +295,7 @@ export interface Admission {
   admissionDate: string
   reason: string
   depositAmount: number
+  dailyRate?: number
   notes?: string
   status: AdmissionStatus
   dischargeDate?: string
@@ -322,7 +341,10 @@ export interface Surgery {
   procedureName: string
   surgeonId: string
   surgeonName: string
+  assistantSurgeonName?: string
   otRoom: string
+  priority?: "Elective" | "Urgent" | "Emergency"
+  anesthesiaType?: string
   scheduledDate: string // ISO date
   scheduledTime: string // HH:mm
   durationMinutes: number

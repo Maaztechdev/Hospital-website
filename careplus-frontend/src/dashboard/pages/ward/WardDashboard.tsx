@@ -17,32 +17,44 @@ import { useToast } from "@/hooks/use-toast"
 import { api } from "@/lib/api"
 
 export default function WardDashboard() {
-  const { beds, transfers, refreshWardState } = useDashboard()
+  const { beds, transfers, dataLoading, currentUser, dispatch, refreshWardState } = useDashboard()
   const { toast } = useToast()
+  const [updatingBedIds, setUpdatingBedIds] = React.useState<Set<string>>(() => new Set())
   const [drawerBed, setDrawerBed] = React.useState<Bed | null>(null)
   const [admitOpen, setAdmitOpen] = React.useState(false)
   const [transferBed, setTransferBed] = React.useState<Bed | null>(null)
   const [dischargeBed, setDischargeBed] = React.useState<Bed | null>(null)
-  const [loading, setLoading] = React.useState(true)
-
-  React.useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 450)
-    return () => clearTimeout(t)
-  }, [])
-
   const summary = bedsSummary(beds)
+  const canManageBeds = currentUser?.role === "admin" || currentUser?.role === "nurse"
+  const canAdmitPatient = ["admin", "nurse", "receptionist", "doctor"].includes(currentUser?.role ?? "")
 
   // keep drawer bed fresh as global state changes (e.g. after transfer/discharge)
   const liveDrawerBed = drawerBed ? beds.find((b) => b.id === drawerBed.id) ?? null : null
 
   async function updateBedStatus(bed: Bed, status: "AVAILABLE" | "MAINTENANCE") {
+    setUpdatingBedIds((current) => new Set(current).add(bed.id))
     try {
       await api.setBedStatus(bed.id, status)
-      await refreshWardState()
+      dispatch({
+        type: "SET_BEDS",
+        beds: beds.map((item) => item.id === bed.id ? { ...item, status: status === "AVAILABLE" ? "Available" : "Maintenance" } : item),
+      })
+      try {
+        await refreshWardState()
+      } catch (error) {
+        toast({ title: "Bed updated but board refresh failed", description: error instanceof Error ? error.message : "Unable to refresh ward data.", variant: "error" })
+        return
+      }
       toast({ title: "Bed updated", description: `${bed.bedNumber} is now ${status === "AVAILABLE" ? "Available" : "Maintenance"}.`, variant: "success" })
       setDrawerBed(null)
     } catch (error) {
       toast({ title: "Bed update failed", description: error instanceof Error ? error.message : "Unable to update bed.", variant: "error" })
+    } finally {
+      setUpdatingBedIds((current) => {
+        const updated = new Set(current)
+        updated.delete(bed.id)
+        return updated
+      })
     }
   }
 
@@ -50,7 +62,7 @@ export default function WardDashboard() {
     <div className="flex flex-col gap-4">
       <DashboardPageHeader
         title="Ward & Bed Management"
-        action={<Button size="sm" onClick={() => setAdmitOpen(true)}><Plus className="h-4 w-4" /> Admit Patient</Button>}
+        action={<span title={canAdmitPatient ? undefined : "Your role is not authorized to admit patients; ask a nurse or administrator."}><Button size="sm" onClick={() => setAdmitOpen(true)} disabled={!canAdmitPatient}><Plus className="h-4 w-4" /> Admit Patient</Button></span>}
       />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
@@ -64,7 +76,14 @@ export default function WardDashboard() {
         <StatCard label="Admissions" value={summary.occupied.toString()} icon={BedDouble} tone="success" />
       </div>
 
-      {loading ? <SkeletonBedBoard count={16} /> : <BedBoard beds={beds} onSelectBed={(b) => setDrawerBed(b)} />}
+      {dataLoading && beds.length === 0 ? <SkeletonBedBoard count={16} /> : (
+        <BedBoard
+          beds={beds}
+          onSelectBed={(b) => setDrawerBed(b)}
+          onMarkAvailable={canManageBeds ? (bed) => { void updateBedStatus(bed, "AVAILABLE") } : undefined}
+          updatingBedIds={updatingBedIds}
+        />
+      )}
 
       {transfers.length > 0 && (
         <div className="rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-4">
@@ -88,6 +107,7 @@ export default function WardDashboard() {
         onDischarge={(b) => { setDrawerBed(null); setDischargeBed(b) }}
         onMarkClean={(b) => { void updateBedStatus(b, "AVAILABLE") }}
         onMarkMaintenance={(b) => { void updateBedStatus(b, "MAINTENANCE") }}
+        canManageBeds={canManageBeds}
       />
 
       <AdmitPatientModal open={admitOpen} onClose={() => setAdmitOpen(false)} />
