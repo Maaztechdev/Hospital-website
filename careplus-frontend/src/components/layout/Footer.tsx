@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom"
 import { HeartPulse, MapPin, Phone, Mail } from "lucide-react"
 import { useHospitalProfile } from "@/lib/hospitalProfile"
+import { siteContact } from "@/lib/siteConfig"
 
 const SOCIAL_PATHS = [
   // Facebook
@@ -88,7 +89,8 @@ export function Footer() {
             <h4 className="mb-4 text-sm font-semibold text-[var(--color-ink)]">Contact</h4>
             <ul className="space-y-3 text-sm text-[var(--color-ink-soft)]">
               <li className="flex items-start gap-2">
-                <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" />{profile.address || "Hospital address unavailable"}
+                <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" />
+                {profile.address || siteContact.address}
               </li>
               <li className="flex items-center gap-2">
                 <Phone className="h-4 w-4 shrink-0 text-[var(--color-accent)]" />
@@ -96,7 +98,7 @@ export function Footer() {
               </li>
               <li className="flex items-center gap-2">
                 <Mail className="h-4 w-4 shrink-0 text-[var(--color-accent)]" />
-                <a href={`mailto:${profile.email ?? ""}`} className="hover:text-[var(--color-primary)]">{profile.email || "Email unavailable"}</a>
+                <a href={`mailto:${profile.email ?? siteContact.email}`} className="hover:text-[var(--color-primary)]">{profile.email || siteContact.email}</a>
               </li>
             </ul>
           </div>

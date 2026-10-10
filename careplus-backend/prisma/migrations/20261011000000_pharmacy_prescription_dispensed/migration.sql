@@ -1,0 +1,1 @@
+ALTER TYPE "PrescriptionStatus" ADD VALUE 'DISPENSED';

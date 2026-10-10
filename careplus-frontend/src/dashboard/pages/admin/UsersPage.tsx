@@ -1,5 +1,5 @@
 import * as React from "react"
-import { UserPlus, Users, UserX } from "lucide-react"
+import { UserPlus, Users, UserX, UserPen } from "lucide-react"
 import { DashboardPageHeader } from "@/dashboard/components/Layout"
 import { DataTable } from "@/dashboard/components/DataTable"
 import { FilterBar } from "@/dashboard/components/Primitives"
@@ -11,9 +11,18 @@ import { Modal } from "@/dashboard/components/Primitives"
 import { api, type ApiError, type ApiUser } from "@/lib/api"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { useToast } from "@/hooks/use-toast"
+import { StaffProfileModal } from "@/dashboard/components/StaffProfileModal"
 
-const ROLES = ["ADMIN", "RECEPTIONIST", "DOCTOR", "LAB_TECHNICIAN", "PHARMACIST", "NURSE"] as const
+const ROLES = ["ADMIN", "BILLING_MANAGER", "RECEPTIONIST", "DOCTOR", "LAB_TECHNICIAN", "PATHOLOGIST", "ULTRASOUND_TECH", "ULTRASOUND_TECHNICIAN", "RADIOLOGIST", "PHARMACIST", "NURSE"] as const
 type Department = { id: string; name: string }
+type UserField = "name" | "email" | "password" | "phone" | "role" | "departmentId"
+type UserFieldErrors = Partial<Record<UserField, string>>
+
+function validationErrors(error: unknown): UserFieldErrors {
+  const details = (error as ApiError).details
+  if (!details || typeof details !== "object") return {}
+  return Object.fromEntries(Object.entries(details as Record<string, unknown>).map(([field, messages]) => [field, Array.isArray(messages) ? String(messages[0]) : String(messages)])) as UserFieldErrors
+}
 
 export default function UsersPage() {
   const { currentUser } = useDashboard()
@@ -25,7 +34,9 @@ export default function UsersPage() {
   const [error, setError] = React.useState<string | null>(null)
   const [open, setOpen] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
+  const [fieldErrors, setFieldErrors] = React.useState<UserFieldErrors>({})
   const [editing, setEditing] = React.useState<ApiUser | null>(null)
+  const [profileUser, setProfileUser] = React.useState<ApiUser | null>(null)
   const [form, setForm] = React.useState({ name: "", email: "", password: "", phone: "", role: "RECEPTIONIST", departmentId: "" })
 
   async function load() {
@@ -44,17 +55,26 @@ export default function UsersPage() {
 
   function openCreate() {
     setEditing(null)
+    setFieldErrors({})
     setForm({ name: "", email: "", password: "", phone: "", role: "RECEPTIONIST", departmentId: "" })
     setOpen(true)
   }
 
   function openEdit(user: ApiUser) {
     setEditing(user)
+    setFieldErrors({})
     setForm({ name: user.name, email: user.email, password: "", phone: user.phone ?? "", role: user.role, departmentId: user.departmentId ?? "" })
     setOpen(true)
   }
 
   async function save() {
+    const nextErrors: UserFieldErrors = {}
+    if (form.name.trim().length < 2) nextErrors.name = "Name must be at least 2 characters"
+    if (!editing && !/^\S+@\S+\.\S+$/.test(form.email.trim())) nextErrors.email = "Enter a valid email address"
+    if (!editing && (form.password.length < 8 || !/[A-Z]/.test(form.password) || !/[0-9]/.test(form.password))) nextErrors.password = "Password must be at least 8 characters and contain an uppercase letter and number"
+    if (form.phone && (form.phone.length < 7 || form.phone.length > 20)) nextErrors.phone = "Phone must be between 7 and 20 characters"
+    setFieldErrors(nextErrors)
+    if (Object.keys(nextErrors).length > 0) return
     setSaving(true)
     try {
       if (editing) {
@@ -67,7 +87,10 @@ export default function UsersPage() {
       setOpen(false)
       await load()
     } catch (requestError) {
-      toast({ title: "User save failed", description: (requestError as ApiError).message, variant: "error" })
+      const errors = validationErrors(requestError)
+      setFieldErrors(errors)
+      const description = Object.values(errors).join("; ") || (requestError as ApiError).message
+      toast({ title: "User save failed", description, variant: "error" })
     } finally { setSaving(false) }
   }
 
@@ -91,18 +114,19 @@ export default function UsersPage() {
       { key: "email", header: "Email", render: (user) => user.email },
       { key: "role", header: "Role", render: (user) => user.role },
       { key: "status", header: "Status", render: (user) => user.isActive ? "Active" : "Inactive" },
-      { key: "actions", header: "Actions", render: (user) => <Button variant="ghost" size="sm" disabled={!user.isActive || user.id === currentUser?.id} onClick={() => void deactivate(user)}><UserX className="h-4 w-4" /> Deactivate</Button> },
+      { key: "actions", header: "Actions", render: (user) => <div className="flex items-center gap-1"><Button variant="ghost" size="sm" onClick={() => setProfileUser(user)}><UserPen className="h-4 w-4" /> Edit Profile</Button><Button variant="ghost" size="sm" disabled={!user.isActive || user.id === currentUser?.id} onClick={() => void deactivate(user)}><UserX className="h-4 w-4" /> Deactivate</Button></div> },
     ]} />
     <Modal open={open} onClose={() => setOpen(false)} title={editing ? "Edit User" : "Create User"}>
       <div className="grid gap-4 sm:grid-cols-2">
-        <div><Label htmlFor="user-name">Name</Label><Input id="user-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></div>
-        {!editing && <div><Label htmlFor="user-email">Email</Label><Input id="user-email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></div>}
-        {!editing && <div><Label htmlFor="user-password">Password</Label><Input id="user-password" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></div>}
-        <div><Label htmlFor="user-phone">Phone</Label><Input id="user-phone" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></div>
-        <div><Label htmlFor="user-role">Role</Label><Select id="user-role" value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>{ROLES.map((role) => <option key={role}>{role}</option>)}</Select></div>
-        <div><Label htmlFor="user-department">Department</Label><Select id="user-department" value={form.departmentId} onChange={(event) => setForm({ ...form, departmentId: event.target.value })}><option value="">No department</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</Select></div>
+        <div><Label htmlFor="user-name">Name</Label><Input id="user-name" value={form.name} error={!!fieldErrors.name} onChange={(event) => { setForm({ ...form, name: event.target.value }); setFieldErrors({ ...fieldErrors, name: undefined }) }} />{fieldErrors.name && <p className="mt-1 text-xs text-[var(--cp-critical)]">{fieldErrors.name}</p>}</div>
+        {!editing && <div><Label htmlFor="user-email">Email</Label><Input id="user-email" type="email" value={form.email} error={!!fieldErrors.email} onChange={(event) => { setForm({ ...form, email: event.target.value }); setFieldErrors({ ...fieldErrors, email: undefined }) }} />{fieldErrors.email && <p className="mt-1 text-xs text-[var(--cp-critical)]">{fieldErrors.email}</p>}</div>}
+        {!editing && <div><Label htmlFor="user-password">Password</Label><Input id="user-password" type="password" value={form.password} error={!!fieldErrors.password} onChange={(event) => { setForm({ ...form, password: event.target.value }); setFieldErrors({ ...fieldErrors, password: undefined }) }} />{fieldErrors.password && <p className="mt-1 text-xs text-[var(--cp-critical)]">{fieldErrors.password}</p>}</div>}
+        <div><Label htmlFor="user-phone">Phone</Label><Input id="user-phone" value={form.phone} error={!!fieldErrors.phone} onChange={(event) => { setForm({ ...form, phone: event.target.value }); setFieldErrors({ ...fieldErrors, phone: undefined }) }} />{fieldErrors.phone && <p className="mt-1 text-xs text-[var(--cp-critical)]">{fieldErrors.phone}</p>}</div>
+        <div><Label htmlFor="user-role">Role</Label><Select id="user-role" value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>{ROLES.map((role) => <option key={role}>{role}</option>)}</Select>{fieldErrors.role && <p className="mt-1 text-xs text-[var(--cp-critical)]">{fieldErrors.role}</p>}</div>
+        <div><Label htmlFor="user-department">Department</Label><Select id="user-department" value={form.departmentId} onChange={(event) => setForm({ ...form, departmentId: event.target.value })}><option value="">No department</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</Select>{fieldErrors.departmentId && <p className="mt-1 text-xs text-[var(--cp-critical)]">{fieldErrors.departmentId}</p>}</div>
       </div>
       <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={() => void save()} disabled={saving}>{saving ? "Saving..." : "Save User"}</Button></div>
     </Modal>
+    <StaffProfileModal user={profileUser} open={!!profileUser} onClose={() => setProfileUser(null)} />
   </div>
 }

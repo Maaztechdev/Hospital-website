@@ -9,7 +9,7 @@ import { DataTable } from "@/dashboard/components/DataTable"
 import { StatusBadge, toneFor } from "@/dashboard/components/StatusBadge"
 import { DashboardPageHeader } from "@/dashboard/components/Layout"
 import { useDashboard } from "@/dashboard/store/useDashboard"
-import { formatCurrency, formatDate } from "@/dashboard/lib/format"
+import { formatCurrency, formatDate, getHospitalDateKey } from "@/dashboard/lib/format"
 import { LineChartWidget, BarChartWidget, DonutChartWidget } from "@/dashboard/components/charts/Charts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { api, type ApiError } from "@/lib/api"
@@ -27,24 +27,31 @@ export default function AdminDashboard() {
     otSurgeries: 0,
   })
   const [appointmentStats, setAppointmentStats] = React.useState<Array<{ status: string; count: number }>>([])
+  const [revenueTrend, setRevenueTrend] = React.useState<Array<{ label: string; value: number }>>([])
+  const [departmentDistribution, setDepartmentDistribution] = React.useState<Array<{ label: string; value: number }>>([])
   const [surgeries, setSurgeries] = React.useState<Array<{ id: string; patient: string; procedure: string; surgeon: string; time: string }>>([])
   const [summaryError, setSummaryError] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     let cancelled = false
+    const today = getHospitalDateKey()
     Promise.all([
       api.getReportsBedOccupancy(),
-      api.getReportsRevenueSummary(),
+      api.getReportsRevenueSummary(today, today),
+      api.getReportsRevenueTrend(),
       api.getReportsAppointmentStats(),
-      api.getReportsSurgeryStats(new Date().toISOString().slice(0, 10)),
+      api.getReportsDepartmentDistribution(),
+      api.getReportsSurgeryStats(today),
       api.listSurgeries(),
     ])
-      .then(([bedOccupancy, revenueSummary, fetchedAppointmentStats, surgeryStats, fetchedSurgeries]) => {
+      .then(([bedOccupancy, revenueSummary, fetchedRevenueTrend, fetchedAppointmentStats, fetchedDepartmentDistribution, surgeryStats, fetchedSurgeries]) => {
         if (cancelled) return
         const admitted = bedOccupancy.occupiedBeds
         const availableBeds = Math.max(0, bedOccupancy.totalBeds - bedOccupancy.occupiedBeds)
         const otSurgeries = surgeryStats.reduce((sum, item) => sum + item.count, 0)
         setAppointmentStats(fetchedAppointmentStats)
+        setRevenueTrend(fetchedRevenueTrend)
+        setDepartmentDistribution(fetchedDepartmentDistribution)
         setSurgeries(fetchedSurgeries.map((surgery) => ({
           id: surgery.id,
           patient: `${surgery.patient.firstName} ${surgery.patient.lastName}`,
@@ -69,7 +76,7 @@ export default function AdminDashboard() {
     return () => { cancelled = true }
   }, [])
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getHospitalDateKey()
   const todaysAppointments = appointments.filter((a) => a.date === today)
   const pendingApprovals = appointments.filter((a) => a.status === "Pending Approval")
   const admitted = dashboardSummary.admitted || 0
@@ -82,7 +89,7 @@ export default function AdminDashboard() {
 
   const recentRegistrations = [...patients].sort((a, b) => (a.registeredAt < b.registeredAt ? 1 : -1)).slice(0, 5)
   const pendingLabTests = labOrders.filter((l) => l.status === "Ordered" || l.status === "Sample Collected").slice(0, 5)
-  const recentPayments = invoices.flatMap((i) => i.payments.map((p) => ({ ...p, invoiceId: i.id, patientName: i.patientName }))).slice(0, 5)
+  const recentPayments = invoices.flatMap((i) => i.payments.map((p) => ({ ...p, invoiceNumber: i.invoiceNumber ?? "Invoice", patientName: i.patientName }))).slice(0, 5)
 
   return (
     <div className="flex flex-col gap-6">
@@ -105,7 +112,7 @@ export default function AdminDashboard() {
         <Card>
           <CardHeader><CardTitle>Weekly Revenue</CardTitle></CardHeader>
           <CardContent>
-            <LineChartWidget data={[{ label: "Selected period", value: todaysRevenue }]} />
+            {revenueTrend.some((point) => point.value > 0) ? <LineChartWidget data={revenueTrend} /> : <p className="flex h-[200px] items-center justify-center text-sm text-[var(--cp-ink-soft)]">No revenue recorded in the last seven days.</p>}
           </CardContent>
         </Card>
         <Card>
@@ -117,7 +124,7 @@ export default function AdminDashboard() {
         <Card>
           <CardHeader><CardTitle>Department-wise Distribution</CardTitle></CardHeader>
           <CardContent>
-            <DonutChartWidget data={[]} />
+            {departmentDistribution.length > 0 ? <DonutChartWidget data={departmentDistribution} /> : <p className="flex h-[180px] items-center justify-center text-sm text-[var(--cp-ink-soft)]">No department activity recorded.</p>}
           </CardContent>
         </Card>
         <Card>
@@ -177,7 +184,7 @@ export default function AdminDashboard() {
               onRowClick={() => navigate("/dashboard/lab")}
               rowTone={(r) => toneFor(r.status)}
               columns={[
-                { key: "id", header: "Order", render: (r) => <span className="cp-tabular text-xs">{r.id}</span> },
+                { key: "order", header: "Order", render: () => <span className="text-xs">Lab order</span> },
                 { key: "patient", header: "Patient", render: (r) => r.patientName },
                 { key: "test", header: "Test", render: (r) => r.testName, hideOnMobile: true },
                 { key: "status", header: "Status", render: (r) => <StatusBadge status={r.status} /> },
@@ -194,7 +201,7 @@ export default function AdminDashboard() {
               emptyIcon={Wallet}
               onRowClick={() => navigate("/dashboard/billing")}
               columns={[
-                { key: "invoice", header: "Invoice", render: (r) => <span className="cp-tabular text-xs">{r.invoiceId}</span> },
+                { key: "invoice", header: "Invoice", render: (r) => <span className="cp-tabular text-xs">{r.invoiceNumber}</span> },
                 { key: "patient", header: "Patient", render: (r) => r.patientName },
                 { key: "amount", header: "Amount", render: (r) => <span className="cp-tabular font-semibold">{formatCurrency(r.amount)}</span> },
                 { key: "method", header: "Method", render: (r) => r.method, hideOnMobile: true },

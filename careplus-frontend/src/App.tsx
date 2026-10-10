@@ -14,6 +14,8 @@ import NotFound from "@/pages/NotFound"
 import DashboardApp from "@/dashboard/DashboardApp"
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary"
 import { HospitalProfileProvider } from "@/lib/hospitalProfile"
+import PrintDocuments from "@/print/PrintDocuments"
+import LabReportVerification from "@/pages/LabReportVerification"
 
 export default function App() {
   return (
@@ -21,6 +23,8 @@ export default function App() {
       <ToastProvider>
       <HospitalProfileProvider>
       <Routes>
+        <Route path="/print/*" element={<PrintDocuments />} />
+        <Route path="/lab-report-verification/:orderNumber" element={<LabReportVerification />} />
         {/* Phase 2: Admin & Staff Management System — separate shell, no public nav/footer */}
         <Route path="/dashboard/*" element={<DashboardApp />} />
 

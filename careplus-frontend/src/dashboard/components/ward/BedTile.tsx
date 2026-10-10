@@ -3,7 +3,7 @@ import { Check, CheckCircle2, UserRound, Clock3, Wrench, Sparkles, BedDouble } f
 import { cn } from "@/lib/utils"
 import type { Bed, BedStatus } from "@/dashboard/types"
 import { Button } from "@/components/ui/button"
-import { formatDate } from "@/dashboard/lib/format"
+import { formatDate, getHospitalDateKeyForTimestamp } from "@/dashboard/lib/format"
 
 export const BED_STATUS_META: Record<BedStatus, { icon: typeof Check; tone: string; bg: string; ring: string }> = {
   Available: { icon: Check, tone: "text-[var(--cp-success)]", bg: "bg-[var(--cp-success-light)]", ring: "border-[var(--cp-success)]/30" },
@@ -32,8 +32,12 @@ export function BedTile({
   const Icon = meta.icon
   const [showTip, setShowTip] = React.useState(false)
   const daysAdmitted = bed.admittedAt
-    ? Math.max(1, Math.floor((Date.now() - new Date(bed.admittedAt).getTime()) / 86_400_000) + 1)
+    ? Math.max(0, Math.round((
+      new Date(`${getHospitalDateKeyForTimestamp(new Date().toISOString())}T00:00:00Z`).getTime() -
+      new Date(`${getHospitalDateKeyForTimestamp(new Date(bed.admittedAt).toISOString())}T00:00:00Z`).getTime()
+    ) / 86_400_000))
     : null
+  const admittedDuration = daysAdmitted === 0 ? "Today" : `${daysAdmitted} day${daysAdmitted === 1 ? "" : "s"}`
 
   return (
     <div
@@ -66,11 +70,13 @@ export function BedTile({
           <p className="cp-tabular text-sm font-bold text-[var(--cp-ink)]">{bed.bedNumber}</p>
           <p className={cn("text-[11px] font-semibold", meta.tone)}>{bed.status}</p>
           {bed.status === "Occupied" && bed.patientName && (
-            <div className="mt-1 max-w-full text-[10px] leading-tight text-[var(--cp-ink)]" title={`${bed.patientName}${bed.doctorName ? ` · ${bed.doctorName}` : ""}${daysAdmitted ? ` · ${daysAdmitted} days admitted` : ""}`}>
+            <div className="mt-1 max-w-full text-[10px] leading-tight text-[var(--cp-ink)]" title={`${bed.patientName}${bed.doctorName ? ` · ${bed.doctorName}` : ""}${admittedDuration ? ` · ${admittedDuration} admitted` : ""}`}>
               <p className="max-w-full truncate font-semibold">{bed.patientName}</p>
+              {bed.roundDoneToday && <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-[var(--cp-success)]"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--cp-success)]" />Round done today</span>}
+              {bed.depositPending && <p className="mt-1 inline-flex rounded bg-[var(--cp-warning-light)] px-1 py-0.5 font-semibold text-[var(--cp-warning)]">Deposit pending</p>}
               {bed.doctorName && <p className="max-w-full truncate">{bed.doctorName}</p>}
               {bed.admittedAt && <p>Admitted {formatDate(bed.admittedAt)}</p>}
-              {daysAdmitted && <p>{daysAdmitted} day{daysAdmitted === 1 ? "" : "s"} admitted</p>}
+              {admittedDuration && <p>{admittedDuration === "Today" ? "Admitted today" : `${admittedDuration} admitted`}</p>}
             </div>
           )}
         </div>

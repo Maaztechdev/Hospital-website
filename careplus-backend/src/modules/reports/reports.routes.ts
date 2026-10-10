@@ -1,5 +1,6 @@
 import { Request, Response, Router } from "express";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@config/prisma";
 import { authenticate } from "@common/middleware/authenticate";
 import { requireRole } from "@common/middleware/requireRole";
@@ -10,15 +11,33 @@ import { sendSuccess } from "@common/utils/apiResponse";
 const dateRangeSchema = z.object({
   from: z.string().date().optional(),
   to: z.string().date().optional(),
+  departmentId: z.string().uuid().optional(),
 });
 
-const dateSchema = z.object({ date: z.string().date().optional() });
+const dateSchema = z.object({ date: z.string().date().optional(), departmentId: z.string().uuid().optional() });
+const bedOccupancySchema = z.object({ wardType: z.enum(["GENERAL", "PRIVATE", "ICU"]).optional() });
+
+function addCalendarDays(dateKey: string, daysToAdd: number) {
+  let [year, month, day] = dateKey.split("-").map(Number);
+  const isLeapYear = (value: number) => value % 4 === 0 && (value % 100 !== 0 || value % 400 === 0);
+  const daysInMonth = (value: number, monthIndex: number) => monthIndex === 2 ? (isLeapYear(value) ? 29 : 28) : [4, 6, 9, 11].includes(monthIndex) ? 30 : 31;
+  while (daysToAdd > 0) {
+    const remaining = daysInMonth(year, month) - day;
+    if (daysToAdd <= remaining) { day += daysToAdd; daysToAdd = 0 }
+    else { daysToAdd -= remaining + 1; day = 1; month += 1; if (month > 12) { month = 1; year += 1 } }
+  }
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function currentHospitalDateKey() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
 
 function rangeFilter(from?: string, to?: string) {
   if (!from && !to) return undefined;
   return {
-    ...(from ? { gte: new Date(`${from}T00:00:00.000Z`) } : {}),
-    ...(to ? { lte: new Date(`${to}T23:59:59.999Z`) } : {}),
+    ...(from ? { gte: new Date(`${from}T00:00:00+05:00`) } : {}),
+    ...(to ? { lt: new Date(`${addCalendarDays(to, 1)}T00:00:00+05:00`) } : {}),
   };
 }
 
@@ -34,30 +53,72 @@ const reportsService = {
     const totalOutstanding = invoices.reduce((s, i) => s + Number(i.balanceAmount), 0);
     return { invoiceCount: invoices.length, totalBilled, totalCollected, totalOutstanding };
   },
-
-  async appointmentStats(from?: string, to?: string) {
-    const appointmentDate = rangeFilter(from, to);
-    const grouped = await prisma.appointment.groupBy({
-      by: ["status"],
-      where: appointmentDate ? { appointmentDate } : {},
-      _count: { _all: true },
+  async revenueTrend(from: string, to: string) {
+    const payments = await prisma.payment.findMany({
+      where: { deletedAt: null, paymentDate: rangeFilter(from, to) },
+      select: { paymentDate: true, amount: true },
+      orderBy: { paymentDate: "asc" },
     });
-    return grouped.map((g) => ({ status: g.status, count: g._count._all }));
+    const totals = new Map<string, number>();
+    for (const payment of payments) {
+      const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(payment.paymentDate);
+      totals.set(day, (totals.get(day) ?? 0) + Number(payment.amount));
+    }
+    const points: Array<{ label: string; value: number }> = [];
+    const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const weekdayIndex = (dateKey: string) => {
+      const [yearValue, month, day] = dateKey.split("-").map(Number);
+      const year = yearValue - (month < 3 ? 1 : 0);
+      const offsets = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+      return (year + Math.floor(year / 4) - Math.floor(year / 100) + Math.floor(year / 400) + offsets[month - 1] + day) % 7;
+    };
+    for (let key = from; key <= to; key = addCalendarDays(key, 1)) {
+      points.push({ label: weekdayNames[weekdayIndex(key)], value: totals.get(key) ?? 0 });
+    }
+    return points;
   },
 
-  async bedOccupancy() {
-    const total = await prisma.bed.count({ where: { isActive: true } });
-    const occupied = await prisma.bed.count({ where: { isActive: true, status: "OCCUPIED" } });
+  async appointmentStats(from?: string, to?: string, departmentId?: string) {
+    const conditions: Prisma.Sql[] = [];
+    if (from) conditions.push(Prisma.sql`appointment_date >= ${from}::date`);
+    if (to) conditions.push(Prisma.sql`appointment_date <= ${to}::date`);
+    if (departmentId) conditions.push(Prisma.sql`department_id = ${departmentId}`);
+    const where = conditions.length ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}` : Prisma.empty;
+    return prisma.$queryRaw<Array<{ status: string; count: number }>>(Prisma.sql`
+      SELECT status::text AS status, COUNT(*)::int AS count
+      FROM appointments
+      ${where}
+      GROUP BY status
+    `);
+  },
+
+  async departmentDistribution(departmentId?: string) {
+    const appointments = await prisma.appointment.findMany({
+      where: departmentId ? { departmentId } : {},
+      select: { doctor: { select: { department: { select: { name: true } } } } },
+    });
+    const totals = new Map<string, number>();
+    for (const appointment of appointments) {
+      const department = appointment.doctor.department?.name ?? "Unassigned";
+      totals.set(department, (totals.get(department) ?? 0) + 1);
+    }
+    return [...totals.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  },
+
+  async bedOccupancy(wardType?: "GENERAL" | "PRIVATE" | "ICU") {
+    const where = { isActive: true, ...(wardType ? { room: { ward: { wardType } } } : {}) };
+    const total = await prisma.bed.count({ where });
+    const occupied = await prisma.bed.count({ where: { ...where, status: "OCCUPIED" } });
     return { totalBeds: total, occupiedBeds: occupied, occupancyRate: total > 0 ? Math.round((occupied / total) * 10000) / 100 : 0 };
   },
 
-  async surgeryStats(date?: string) {
+  async surgeryStats(date?: string, departmentId?: string) {
     const scheduledStart = date
-      ? { gte: new Date(`${date}T00:00:00.000Z`), lte: new Date(`${date}T23:59:59.999Z`) }
+      ? { gte: new Date(`${date}T00:00:00+05:00`), lt: new Date(`${addCalendarDays(date, 1)}T00:00:00+05:00`) }
       : undefined;
     const grouped = await prisma.surgery.groupBy({
       by: ["status"],
-      where: scheduledStart ? { scheduledStart } : {},
+      where: { ...(scheduledStart ? { scheduledStart } : {}), ...(departmentId ? { surgeon: { departmentId } } : {}) },
       _count: { _all: true },
     });
     return grouped.map((item) => ({ status: item.status, count: item._count._all }));
@@ -98,11 +159,11 @@ const reportsService = {
     return { averageTurnaroundHours: Math.round((totalHours / orders.length) * 100) / 100, sampleSize: orders.length };
   },
 
-  async doctorProductivity(from?: string, to?: string) {
+  async doctorProductivity(from?: string, to?: string, departmentId?: string) {
     const createdAt = rangeFilter(from, to);
     const grouped = await prisma.consultation.groupBy({
       by: ["doctorId"],
-      where: createdAt ? { createdAt } : {},
+      where: { ...(createdAt ? { createdAt } : {}), ...(departmentId ? { doctor: { departmentId } } : {}) },
       _count: { _all: true },
     });
     const doctors = await prisma.doctor.findMany({ where: { id: { in: grouped.map((g) => g.doctorId) } }, include: { user: { select: { name: true } } } });
@@ -121,19 +182,30 @@ router.get("/revenue-summary", validate({ query: dateRangeSchema }), asyncHandle
   const { from, to } = req.query as Record<string, string | undefined>;
   sendSuccess(res, 200, { data: await reportsService.revenueSummary(from, to) });
 }));
+router.get("/revenue-trend", validate({ query: dateRangeSchema }), asyncHandler(async (req: Request, res: Response) => {
+  const requestedFrom = typeof req.query.from === "string" ? req.query.from : undefined;
+  const requestedTo = typeof req.query.to === "string" ? req.query.to : undefined;
+  const end = requestedTo ?? currentHospitalDateKey();
+  const start = requestedFrom ?? addCalendarDays(end, -6);
+  sendSuccess(res, 200, { data: await reportsService.revenueTrend(start, end) });
+}));
 
 router.get("/appointment-stats", validate({ query: dateRangeSchema }), asyncHandler(async (req: Request, res: Response) => {
   const { from, to } = req.query as Record<string, string | undefined>;
-  sendSuccess(res, 200, { data: await reportsService.appointmentStats(from, to) });
+  sendSuccess(res, 200, { data: await reportsService.appointmentStats(from, to, req.query.departmentId as string | undefined) });
 }));
 
-router.get("/bed-occupancy", asyncHandler(async (_req: Request, res: Response) => {
-  sendSuccess(res, 200, { data: await reportsService.bedOccupancy() });
+router.get("/department-distribution", validate({ query: z.object({ departmentId: z.string().uuid().optional() }) }), asyncHandler(async (req: Request, res: Response) => {
+  sendSuccess(res, 200, { data: await reportsService.departmentDistribution(req.query.departmentId as string | undefined) });
+}));
+
+router.get("/bed-occupancy", validate({ query: bedOccupancySchema }), asyncHandler(async (req: Request, res: Response) => {
+  sendSuccess(res, 200, { data: await reportsService.bedOccupancy(req.query.wardType as "GENERAL" | "PRIVATE" | "ICU" | undefined) });
 }));
 
 router.get("/surgery-stats", validate({ query: dateSchema }), asyncHandler(async (req: Request, res: Response) => {
   const { date } = req.query as { date?: string };
-  sendSuccess(res, 200, { data: await reportsService.surgeryStats(date) });
+  sendSuccess(res, 200, { data: await reportsService.surgeryStats(date, req.query.departmentId as string | undefined) });
 }));
 
 router.get("/low-stock-medicines", asyncHandler(async (_req: Request, res: Response) => {
@@ -151,7 +223,7 @@ router.get("/lab-turnaround", validate({ query: dateRangeSchema }), asyncHandler
 
 router.get("/doctor-productivity", validate({ query: dateRangeSchema }), asyncHandler(async (req: Request, res: Response) => {
   const { from, to } = req.query as Record<string, string | undefined>;
-  sendSuccess(res, 200, { data: await reportsService.doctorProductivity(from, to) });
+  sendSuccess(res, 200, { data: await reportsService.doctorProductivity(from, to, req.query.departmentId as string | undefined) });
 }));
 
 export default router;

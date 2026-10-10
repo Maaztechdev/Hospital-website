@@ -6,28 +6,40 @@ import { Select } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
-import type { Appointment } from "@/dashboard/types"
+import type { Appointment, Patient } from "@/dashboard/types"
+import { PatientSearchSelect } from "@/dashboard/components/PatientSearchSelect"
 import { api, toAppointment, type ApiError } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 
+function getHospitalDateKey(date: Date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(date)
+}
+
+function formatToastDate(dateKey: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey)
+  if (!match) return dateKey
+  const monthName = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(match[2]) - 1]
+  return `${match[3]} ${monthName}`
+}
+
 export function BookAppointmentModal({
   open,
   onClose,
+  onBooked,
   prefillMR,
-  prefillName,
 }: {
   open: boolean
   onClose: () => void
+  onBooked?: (appointmentId: string) => void
   prefillMR?: string
-  prefillName?: string
 }) {
   const { patients, doctors, appointments, dispatch } = useDashboard()
   const { toast } = useToast()
 
-  const [mrNumber, setMrNumber] = React.useState(prefillMR ?? "")
+  const [patient, setPatient] = React.useState<Patient | null>(null)
   const [doctorId, setDoctorId] = React.useState(doctors[0]?.id ?? "")
-  const [date, setDate] = React.useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate] = React.useState(getHospitalDateKey())
   const [time, setTime] = React.useState("")
   const [type, setType] = React.useState<Appointment["type"]>("New Visit")
   const [priority, setPriority] = React.useState<Appointment["priority"]>("Routine")
@@ -36,6 +48,7 @@ export function BookAppointmentModal({
   const [saving, setSaving] = React.useState(false)
   const [availableSlots, setAvailableSlots] = React.useState<string[]>([])
   const [loadingSlots, setLoadingSlots] = React.useState(false)
+  const initializedForRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     if (!doctorId && doctors[0]?.id) setDoctorId(doctors[0].id)
@@ -48,27 +61,28 @@ export function BookAppointmentModal({
     setTime("")
     api.getAvailableSlots(doctorId, date)
       .then((result) => setAvailableSlots(result.availableSlots))
-      .catch(() => setAvailableSlots([]))
+      .catch((cause) => { setAvailableSlots([]); toast({ title: "Unable to load available slots", description: cause instanceof Error ? cause.message : "Please try again.", variant: "error" }) })
       .finally(() => setLoadingSlots(false))
-  }, [open, doctorId, date])
+  }, [open, doctorId, date, toast])
 
   React.useEffect(() => {
-    if (open) {
-      setMrNumber(prefillMR ?? "")
-      setTime("")
-      setError(null)
-    }
-  }, [open, prefillMR])
+    if (!open) { initializedForRef.current = null; return }
+    const prefillKey = prefillMR ?? ""
+    if (initializedForRef.current === prefillKey) return
+    initializedForRef.current = prefillKey
+    setPatient(patients.find((candidate) => candidate.mrNumber === prefillMR) ?? null)
+    setTime("")
+    setError(null)
+  }, [open, prefillMR, patients])
 
   const doctor = doctors.find((d) => d.id === doctorId)
-  const patient = patients.find((p) => p.mrNumber === mrNumber)
 
   async function submit() {
-    if (!mrNumber && !prefillName) { setError("Select a patient (MR number) to continue."); return }
+    if (!patient) { setError("Select a patient to continue."); return }
     if (!time) { setError("Choose an available time slot."); return }
     setError(null)
 
-    if (!patient?.id) { setError("Select a registered patient using their MR number."); return }
+    if (!patient.id) { setError("Select a registered patient."); return }
     setSaving(true)
     try {
       const created = await api.createAppointment({
@@ -83,7 +97,12 @@ export function BookAppointmentModal({
       })
       const appointment = toAppointment(created)
       dispatch({ type: "ADD_APPOINTMENT", appointment })
-      toast({ title: "Appointment submitted", description: `Token #${appointment.token} is pending approval.`, variant: "success" })
+      onBooked?.(appointment.id)
+      toast({
+        title: `Appointment ${appointment.status.toLowerCase()}`,
+        description: `Token #${appointment.token} for ${appointment.doctorName} on ${formatToastDate(appointment.date)}, ${appointment.time}`,
+        variant: "success",
+      })
       onClose()
     } catch (requestError) {
       setError((requestError as ApiError).message || "Unable to book appointment")
@@ -96,9 +115,7 @@ export function BookAppointmentModal({
     <Modal open={open} onClose={onClose} title="Book Appointment" description="Doctor-wise slot availability updates live to prevent double-booking." size="lg">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
-          <Label htmlFor="bk-mr">Patient (MR Number or name)</Label>
-          <Input id="bk-mr" value={mrNumber || prefillName || ""} onChange={(e) => setMrNumber(e.target.value)} placeholder="e.g. MR-2026-000101" />
-          {patient && <p className="mt-1 text-xs text-[var(--cp-ink-soft)]">Matched: {patient.name} · {patient.age} yrs · {patient.gender}</p>}
+          <PatientSearchSelect value={patient} onChange={(selected) => { setPatient(selected); setError(null) }} prefillMR={prefillMR} error={error && !patient ? error : undefined} />
         </div>
 
         <div>
@@ -110,7 +127,7 @@ export function BookAppointmentModal({
 
         <div>
           <Label htmlFor="bk-date">Date</Label>
-          <Input id="bk-date" type="date" value={date} onChange={(e) => { setDate(e.target.value); setTime("") }} />
+          <Input id="bk-date" type="date" min={getHospitalDateKey()} value={date} onChange={(e) => { setDate(e.target.value); setTime("") }} />
         </div>
 
         <div>
@@ -132,7 +149,7 @@ export function BookAppointmentModal({
           {loadingSlots ? (
             <p className="text-xs text-[var(--cp-ink-soft)]">Loading available slots…</p>
           ) : availableSlots.length === 0 ? (
-            <p className="text-xs text-[var(--cp-ink-soft)]">No slots available for this date</p>
+            <p className="text-xs text-[var(--cp-ink-soft)]">No slots available</p>
           ) : (
             <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
               {availableSlots.map((slot) => (

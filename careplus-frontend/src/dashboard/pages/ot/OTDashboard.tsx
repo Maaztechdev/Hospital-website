@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useNavigate } from "react-router-dom"
 import { Syringe, CalendarClock, CheckCircle2, AlertTriangle, Plus, ChevronLeft, ChevronRight } from "lucide-react"
 import { StatCard } from "@/dashboard/components/StatCard"
 import { DashboardPageHeader } from "@/dashboard/components/Layout"
@@ -8,7 +7,11 @@ import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { OT_ROOMS } from "@/dashboard/data/wardData"
 import { ScheduleSurgeryModal } from "@/dashboard/pages/ot/ScheduleSurgeryModal"
 import { OT_STATUS_META } from "@/dashboard/pages/ot/otStatusMeta"
+import { formatDate, formatWeekday, getHospitalDateKey, getLocalDateKey } from "@/dashboard/lib/format"
 import { cn } from "@/lib/utils"
+import { api, type ApiOTSummary } from "@/lib/api"
+import { useToast } from "@/hooks/use-toast"
+import SurgeryDetail from "@/dashboard/pages/ot/SurgeryDetail"
 
 function startOfWeek(d: Date) {
   const date = new Date(d)
@@ -21,9 +24,11 @@ function startOfWeek(d: Date) {
 
 export default function OTDashboard() {
   const { surgeries } = useDashboard()
-  const navigate = useNavigate()
+  const { toast } = useToast()
   const [weekAnchor, setWeekAnchor] = React.useState(new Date())
   const [scheduleOpen, setScheduleOpen] = React.useState(false)
+  const [selectedSurgeryId, setSelectedSurgeryId] = React.useState<string | null>(null)
+  const [summary, setSummary] = React.useState<ApiOTSummary | null>(null)
 
   const weekStart = startOfWeek(weekAnchor)
   const days = Array.from({ length: 7 }, (_, i) => {
@@ -32,17 +37,16 @@ export default function OTDashboard() {
     return d
   })
 
-  const todayStr = new Date().toISOString().slice(0, 10)
-  const dayStr = (d: Date) => d.toISOString().slice(0, 10)
+  const todayStr = getHospitalDateKey()
+  const dayStr = getLocalDateKey
 
-  const today = surgeries.filter((s) => s.scheduledDate === todayStr)
-  const inProgress = surgeries.filter((s) => s.status === "In Progress")
-  const completedToday = today.filter((s) => s.status === "Completed")
-  const conflictsToday = (() => {
-    const seen = new Map<string, number>()
-    today.forEach((s) => { const k = `${s.otRoom}-${s.scheduledTime}`; seen.set(k, (seen.get(k) ?? 0) + 1) })
-    return [...seen.values()].filter((v) => v > 1).length
-  })()
+  React.useEffect(() => {
+    let active = true
+    api.getOTSummary().then((data) => { if (active) setSummary(data) }).catch((error: Error) => {
+      if (active) toast({ title: "Unable to load OT summary", description: error.message, variant: "error" })
+    })
+    return () => { active = false }
+  }, [surgeries, toast])
 
   return (
     <div className="flex flex-col gap-4">
@@ -52,15 +56,15 @@ export default function OTDashboard() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard label="Today's Surgeries" value={today.length.toString()} icon={CalendarClock} tone="primary" />
-        <StatCard label="In Progress" value={inProgress.length.toString()} icon={Syringe} tone="critical" />
-        <StatCard label="Completed Today" value={completedToday.length.toString()} icon={CheckCircle2} tone="success" />
-        <StatCard label="Conflicts" value={conflictsToday.toString()} icon={AlertTriangle} tone="warning" />
+        <StatCard label="Today's Surgeries" value={summary?.todaysSurgeries.toString() ?? "—"} icon={CalendarClock} tone="primary" />
+        <StatCard label="In Progress" value={summary?.inProgress.toString() ?? "—"} icon={Syringe} tone="critical" />
+        <StatCard label="Completed Today" value={summary?.completedToday.toString() ?? "—"} icon={CheckCircle2} tone="success" />
+        <StatCard label="Conflicts" value={summary?.conflicts.toString() ?? "—"} icon={AlertTriangle} tone="warning" />
       </div>
 
       <div className="rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-4">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm font-bold text-[var(--cp-ink)]">Week View — {weekStart.toLocaleDateString("en-GB", { day: "2-digit", month: "short" })} to {days[6].toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</p>
+          <p className="text-sm font-bold text-[var(--cp-ink)]">Week View — {formatDate(getLocalDateKey(weekStart))} to {formatDate(getLocalDateKey(days[6]))}</p>
           <div className="flex items-center gap-1">
             <button onClick={() => setWeekAnchor((d) => { const n = new Date(d); n.setDate(n.getDate() - 7); return n })} className="rounded-lg p-1.5 text-[var(--cp-ink-soft)] hover:bg-[var(--cp-bg)]"><ChevronLeft className="h-4 w-4" /></button>
             <button onClick={() => setWeekAnchor(new Date())} className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--cp-primary)] hover:bg-[var(--cp-primary-light)]">Today</button>
@@ -73,7 +77,7 @@ export default function OTDashboard() {
             <div className="bg-[var(--cp-surface)] p-2" />
             {days.map((d) => (
               <div key={d.toISOString()} className={cn("bg-[var(--cp-surface)] p-2 text-center", dayStr(d) === todayStr && "bg-[var(--cp-primary-light)]")}>
-                <p className="text-[11px] font-semibold text-[var(--cp-ink-soft)]">{d.toLocaleDateString("en-GB", { weekday: "short" })}</p>
+                <p className="text-[11px] font-semibold text-[var(--cp-ink-soft)]">{formatWeekday(getLocalDateKey(d))}</p>
                 <p className="cp-tabular text-sm font-bold text-[var(--cp-ink)]">{d.getDate()}</p>
               </div>
             ))}
@@ -90,7 +94,9 @@ export default function OTDashboard() {
                         return (
                           <button
                             key={s.id}
-                            onClick={() => navigate(`/dashboard/ot/${s.id}`)}
+                            onClick={() => setSelectedSurgeryId(s.id)}
+                            aria-label={`${s.scheduledTime} ${s.patientName} — ${s.procedureName}`}
+                            title={s.procedureName}
                             className={cn(
                               "rounded-md px-2 py-1 text-left text-[11px] font-medium leading-tight transition-transform hover:-translate-y-0.5",
                               meta.bg, meta.tone,
@@ -120,7 +126,15 @@ export default function OTDashboard() {
         </div>
       </div>
 
-      <ScheduleSurgeryModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} />
+      <ScheduleSurgeryModal
+        open={scheduleOpen}
+        onClose={() => setScheduleOpen(false)}
+        onScheduled={(scheduledDate) => {
+          const [year, month, day] = scheduledDate.split("-").map(Number)
+          setWeekAnchor(new Date(year, month - 1, day, 12))
+        }}
+      />
+      {selectedSurgeryId && <SurgeryDetail surgeryId={selectedSurgeryId} onClose={() => setSelectedSurgeryId(null)} />}
     </div>
   )
 }

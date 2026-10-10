@@ -1,0 +1,1 @@
+ALTER TYPE "AppointmentStatus" RENAME VALUE 'DONE' TO 'COMPLETED';

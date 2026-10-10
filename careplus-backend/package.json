@@ -18,6 +18,11 @@
     "test:integration": "jest --runInBand --detectOpenHandles tests/integration",
     "pharmacy:smoke": "tsx scripts/pharmacy-persistence-smoke.ts",
     "audit:full-lifecycle": "tsx scripts/full-lifecycle-consistency-audit.ts",
+    "cleanup:placeholder-data": "tsx scripts/cleanup-placeholder-data.ts",
+    "appointments:stale-report": "tsx scripts/list-stale-appointments.ts",
+    "test-records:report": "tsx scripts/report-suspected-test-appointments.ts",
+    "seed:demo": "tsx scripts/seed-demo-presentation.ts",
+    "tokens:duplicate-report": "tsx scripts/report-duplicate-appointment-tokens.ts",
     "test:watch": "jest --watch"
   },
   "prisma": {

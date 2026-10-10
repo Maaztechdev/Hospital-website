@@ -9,6 +9,12 @@ router.get("/hospital-profile/*", (req, res, next) => {
     res.sendFile(target, { dotfiles: "deny" }, (error) => { if (error) next(error); });
   } catch (error) { next(error); }
 });
+router.get("/public-profile-pictures/*", (req, res, next) => {
+  try {
+    const target = resolvePrivateFile(`public-profile-pictures/${(req.params as Record<string, string>)['0']}`);
+    res.sendFile(target, { dotfiles: "deny" }, (error) => { if (error) next(error); });
+  } catch (error) { next(error); }
+});
 router.get("/*", authenticate, (req, res, next) => {
   try {
     const target = resolvePrivateFile(req.params[0]);

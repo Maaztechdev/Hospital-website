@@ -10,6 +10,7 @@ import { Select } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { useHospitalProfile } from "@/lib/hospitalProfile"
+import { siteContact } from "@/lib/siteConfig"
 import { useToast } from "@/hooks/use-toast"
 
 interface ContactForm {
@@ -81,9 +82,9 @@ export default function Contact() {
           <Reveal>
             <div className="space-y-5">
               {[
-                { icon: MapPin, title: "Address", lines: [profile.address || "Hospital address unavailable"] },
+                { icon: MapPin, title: "Address", lines: [profile.address || siteContact.address] },
                 { icon: Phone, title: "Phone", lines: [profile.phone || "Contact hospital", "Mon–Sat, 8am–8pm"] },
-                { icon: Mail, title: "Email", lines: [profile.email || "Email unavailable", "We reply within 1 business day"] },
+                { icon: Mail, title: "Email", lines: [profile.email || siteContact.email, "We reply within 1 business day"] },
                 { icon: Clock, title: "Visiting Hours", lines: ["Outpatient: 8am – 8pm daily", "Emergency: 24/7"] },
               ].map((c) => (
                 <Card key={c.title} className="flex items-start gap-4 p-5">
@@ -100,7 +101,7 @@ export default function Contact() {
               ))}
               <div className="overflow-hidden rounded-2xl border border-[var(--color-border-soft)]">
                 <div className="flex h-48 items-center justify-center bg-[var(--color-primary-light)] text-sm text-[var(--color-ink-faint)]">
-                  Map preview — 123 Jinnah Avenue, Islamabad
+                  Map preview — {profile.address || siteContact.address}
                 </div>
               </div>
             </div>

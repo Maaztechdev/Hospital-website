@@ -18,7 +18,7 @@ export function Toaster() {
   const { toasts, dismiss } = useToast()
 
   return (
-    <div className="fixed bottom-5 right-5 z-[100] flex w-[calc(100%-2.5rem)] max-w-sm flex-col gap-3 sm:w-full">
+    <div className="fixed right-4 top-4 z-[100] flex w-[calc(100%-2rem)] max-w-sm flex-col sm:right-5 sm:top-5 sm:w-full">
       <AnimatePresence>
         {toasts.map((t) => {
           const Icon = ICONS[t.variant ?? "info"]

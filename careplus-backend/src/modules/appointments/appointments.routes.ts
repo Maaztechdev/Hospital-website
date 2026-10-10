@@ -29,13 +29,14 @@ router.get("/public/departments", asyncHandler(async (_req, res) => {
 
 router.get("/public/doctors", asyncHandler(async (_req, res) => {
   const doctors = await prisma.doctor.findMany({
-    where: { isAvailable: true, department: { status: "ACTIVE" } },
-    include: { user: { select: { name: true } }, department: { select: { id: true, name: true } } },
+    where: { isAvailable: true, OR: [{ department: { status: "ACTIVE" } }, { departmentId: null }], user: { role: "DOCTOR", isActive: true, deletedAt: null } },
+    include: { user: { select: { id: true, name: true, profilePictureUrl: true } }, department: { select: { id: true, name: true } } },
     orderBy: { user: { name: "asc" } },
   });
   sendSuccess(res, 200, { data: doctors });
 }));
 
+router.get("/public/doctors/:doctorId/slots", appointmentsController.getAvailableSlots);
 router.post("/public", validate({ body: publicAppointmentSchema }), appointmentsController.createPublic);
 
 router.use(authenticate);
@@ -43,7 +44,7 @@ router.use(authenticate);
 router.get("/doctors", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "LAB_TECHNICIAN", "PHARMACIST", "NURSE"]), asyncHandler(async (_req, res) => {
   const doctors = await prisma.doctor.findMany({
     where: { isAvailable: true, department: { status: "ACTIVE" } },
-    include: { user: { select: { name: true } }, department: { select: { id: true, name: true } } },
+    include: { user: { select: { id: true, name: true, profilePictureUrl: true } }, department: { select: { id: true, name: true } } },
     orderBy: { user: { name: "asc" } },
   });
   sendSuccess(res, 200, { data: doctors });

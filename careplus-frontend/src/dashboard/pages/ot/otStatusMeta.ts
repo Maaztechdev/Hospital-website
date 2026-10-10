@@ -7,4 +7,5 @@ export const OT_STATUS_META: Record<OTStatus, { bg: string; tone: string; dot: s
   Recovery: { bg: "bg-[var(--cp-success-light)]", tone: "text-[var(--cp-success)]", dot: "bg-[var(--cp-success)]" },
   Completed: { bg: "bg-[var(--cp-neutral-light)]", tone: "text-[var(--cp-neutral)]", dot: "bg-[var(--cp-neutral)]" },
   Cancelled: { bg: "bg-[var(--cp-neutral-light)]", tone: "text-[var(--cp-ink-faint)]", dot: "bg-[var(--cp-ink-faint)]" },
+  Postponed: { bg: "bg-[var(--cp-warning-light)]", tone: "text-[var(--cp-warning)]", dot: "bg-[var(--cp-warning)]" },
 }

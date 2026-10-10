@@ -3,6 +3,7 @@ import { env } from "@config/env";
 import { logger } from "@config/logger";
 import { prisma, disconnectPrisma } from "@config/prisma";
 import { redis } from "@config/redis";
+import { applyStaleAppointmentStatuses } from "./modules/appointments/staleAppointmentLifecycle";
 
 async function main() {
   // Fail fast if the DB is unreachable at boot.
@@ -10,6 +11,16 @@ async function main() {
   logger.info("Database connected");
 
   const app = createApp();
+
+  void applyStaleAppointmentStatuses().catch((error) => {
+    logger.warn({ error }, "Initial stale appointment audit failed");
+  });
+
+  setInterval(() => {
+    void applyStaleAppointmentStatuses().catch((error) => {
+      logger.warn({ error }, "Scheduled stale appointment audit failed");
+    });
+  }, 12 * 60 * 60 * 1000);
 
   const server = app.listen(env.PORT, () => {
     logger.info(`CarePlus backend listening on port ${env.PORT} (${env.NODE_ENV})`);

@@ -1,0 +1,1 @@
+ALTER TABLE "patients" DROP COLUMN "date_of_birth";

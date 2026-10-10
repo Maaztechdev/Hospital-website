@@ -34,6 +34,15 @@ async function logAttempt(email: string, success: boolean, req: Request, userId?
 }
 
 export const authService = {
+  async getCurrentUser(userId: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, email: true, role: true, profilePictureUrl: true },
+    });
+    if (!user) throw new NotFoundError("User not found");
+    return user;
+  },
+
   async login(email: string, password: string, req: Request) {
     const lockKey = email.toLowerCase();
     const failedAttempts = await getFailedLoginCount(lockKey);
@@ -80,6 +89,7 @@ export const authService = {
         name: user.name,
         email: user.email,
         role: user.role,
+        profilePictureUrl: user.profilePictureUrl,
       },
     };
   },
@@ -97,7 +107,12 @@ export const authService = {
       throw new UnauthorizedError("User no longer active");
     }
 
-    const newRefreshToken = await rotateRefreshToken(payload.jti, user.id);
+    let newRefreshToken: string;
+    try {
+      newRefreshToken = await rotateRefreshToken(payload.jti, user.id);
+    } catch {
+      throw new UnauthorizedError("Invalid or expired refresh token");
+    }
     const accessToken = signAccessToken(buildAccessTokenPayload(user));
 
     return { accessToken, refreshToken: newRefreshToken };

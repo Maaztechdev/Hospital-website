@@ -26,6 +26,7 @@ import ultrasoundRoutes from "@modules/ultrasound/ultrasound.routes";
 import pharmacyRoutes from "@modules/pharmacy/pharmacy.routes";
 import billingRoutes from "@modules/billing/billing.routes";
 import wardsRoutes from "@modules/wards/wards.routes";
+import { doctorWardRoundRoutes, wardRoundRoutes } from "@modules/wards/wardRounds.routes";
 import nursingRoutes from "@modules/nursing/nursing.routes";
 import otRoutes from "@modules/ot/ot.routes";
 import notificationsRoutes from "@modules/notifications/notifications.routes";
@@ -108,6 +109,8 @@ export function createApp(): Express {
   router.use("/pharmacy", pharmacyRoutes);
   router.use("/billing", billingRoutes);
   router.use("/wards", wardsRoutes);
+  router.use("/wards", wardRoundRoutes);
+  router.use("/doctors", doctorWardRoundRoutes);
   router.use("/nursing", nursingRoutes);
   router.use("/ot", otRoutes);
   router.use("/notifications", notificationsRoutes);

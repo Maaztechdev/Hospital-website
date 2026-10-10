@@ -9,33 +9,42 @@ import { Select } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
-import { generateId, formatDate } from "@/dashboard/lib/format"
+import { formatBloodGroup, generateId, formatDate, getHospitalDateKey } from "@/dashboard/lib/format"
 import type { Consultation, PrescriptionItem, VitalSigns } from "@/dashboard/types"
 import { useToast } from "@/hooks/use-toast"
 import { NotPermitted } from "@/dashboard/components/Layout"
 import { cn } from "@/lib/utils"
-import { api, type ApiConsultation, type ApiError, type ApiLabTest, type ApiMedicine, type ApiPrescription } from "@/lib/api"
+import { api, apiAssetUrl, getAccessToken, type ApiConsultation, type ApiError, type ApiLabTest, type ApiMedicine, type ApiPrescription } from "@/lib/api"
+import { useHospitalProfile } from "@/lib/hospitalProfile"
+import QRCode from "qrcode"
 
 export default function DoctorConsultation() {
-  const { appointmentId } = useParams()
+  const { appointmentId: routeAppointmentId } = useParams()
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const { patients, appointments, consultations, dispatch } = useDashboard()
+  const { patients, appointments, consultations, dispatch, currentUser } = useDashboard()
+  const hospitalProfile = useHospitalProfile()
 
   const mrNumber = params.get("mr") ?? ""
   const patient = patients.find((p) => p.mrNumber === mrNumber)
-  const appointment = appointments.find((a) => a.id === appointmentId)
-  const existing = consultations.find((c) => c.appointmentId === appointmentId)
+  const [activeAppointmentId, setActiveAppointmentId] = React.useState(routeAppointmentId === "new" ? null : routeAppointmentId ?? null)
+  const appointment = appointments.find((a) => a.id === activeAppointmentId)
+  const existing = consultations.find((c) => c.appointmentId === activeAppointmentId)
   const [remoteConsultation, setRemoteConsultation] = React.useState<ApiConsultation | null>(null)
   const [remotePrescription, setRemotePrescription] = React.useState<ApiPrescription | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [requestError, setRequestError] = React.useState<string | null>(null)
+  const [retryKey, setRetryKey] = React.useState(0)
+  const prescriptionLoadId = React.useRef<string | null>(null)
 
-  const [vitals, setVitals] = React.useState<VitalSigns>(existing?.vitals ?? { bp: "", temperature: "", pulse: "", weight: "", spo2: "" })
+  const [vitals, setVitals] = React.useState<VitalSigns>(existing?.vitals ?? { bp: "", temperature: "", pulse: "", weight: "", spo2: "", respiratoryRate: "" })
   const [chiefComplaint, setChiefComplaint] = React.useState(existing?.chiefComplaint ?? "")
   const [clinicalNotes, setClinicalNotes] = React.useState(existing?.clinicalNotes ?? "")
   const [diagnosis, setDiagnosis] = React.useState(existing?.diagnosis ?? "")
+  const [findings, setFindings] = React.useState("")
+  const [refillNumber, setRefillNumber] = React.useState(0)
+  const [doctorProfile, setDoctorProfile] = React.useState<{ qualification?: string | null; specialization?: string | null; registrationNumber?: string | null; signatureUrl?: string | null; stampUrl?: string | null } | null>(null)
   const [prescriptions, setPrescriptions] = React.useState<PrescriptionItem[]>(existing?.prescriptions ?? [])
   const [labRecs, setLabRecs] = React.useState<string[]>(existing?.labRecommendations ?? [])
   const [followUp, setFollowUp] = React.useState(existing?.followUpDate ?? "")
@@ -51,38 +60,74 @@ export default function DoctorConsultation() {
   const ultrasoundTypes = ["Abdominal", "Obstetric", "Pelvic", "Renal"]
 
   React.useEffect(() => {
-    if (!appointmentId) return
-    api.listConsultations(appointmentId)
+    setRequestError(null)
+    setLoading(true)
+    if (routeAppointmentId === "new" && !activeAppointmentId) {
+      if (!patient?.id) { setRequestError("The selected patient could not be found."); setLoading(false); return }
+      api.startPatientConsultation(patient.id)
+        .then((item) => { setActiveAppointmentId(item.appointmentId); setRemoteConsultation(item) })
+        .catch((error: ApiError) => setRequestError(error.message || "Unable to start consultation"))
+        .finally(() => setLoading(false))
+      return
+    }
+    if (!activeAppointmentId) { setRequestError("No appointment was supplied for this consultation."); setLoading(false); return }
+    api.listConsultations(activeAppointmentId)
       .then((items) => setRemoteConsultation(items[0] ?? null))
       .catch((error: ApiError) => setRequestError(error.message || "Unable to load consultation"))
       .finally(() => setLoading(false))
-  }, [appointmentId])
+  }, [activeAppointmentId, patient?.id, routeAppointmentId, retryKey])
 
   React.useEffect(() => {
     void Promise.all([api.listLabTests(), api.listMedicines()]).then(([tests, medicineList]) => { setLabTests(tests); setMedicines(medicineList) }).catch((error: ApiError) => setRequestError(error.message || "Unable to load clinical catalogs"))
   }, [])
 
   React.useEffect(() => {
+    if (currentUser?.role === "doctor") {
+      void api.getMyStaffProfile().then((result) => setDoctorProfile(result.profile)).catch((cause) => setRequestError(cause instanceof Error ? cause.message : "Unable to load doctor profile"))
+    }
+  }, [currentUser?.role])
+
+  React.useEffect(() => {
     if (!medicineSearch.trim()) { setMedicines([]); return }
-    const timer = window.setTimeout(() => void api.listMedicines(medicineSearch.trim()).then(setMedicines).catch(() => setMedicines([])), 250)
+    const timer = window.setTimeout(() => void api.listMedicines(medicineSearch.trim()).then(setMedicines).catch((cause) => { setMedicines([]); setRequestError(cause instanceof Error ? cause.message : "Unable to search medicines") }), 250)
     return () => window.clearTimeout(timer)
   }, [medicineSearch])
 
   React.useEffect(() => {
     if (!remoteConsultation) return
-    api.listPrescriptions().then((items) => setRemotePrescription(items.find((item) => item.consultationId === remoteConsultation.id) ?? null)).catch(() => undefined)
+    if (prescriptionLoadId.current === remoteConsultation.id) return
+    prescriptionLoadId.current = remoteConsultation.id
+    api.listPrescriptions().then((items) => {
+      const prescription = items.find((item) => item.consultationId === remoteConsultation.id) ?? null
+      setRemotePrescription(prescription)
+      if (prescription) {
+        setPrescriptions(prescription.items.map((item) => ({
+          id: item.id,
+          medicine: item.medicineName,
+          medicineId: item.medicineId ?? undefined,
+          dosage: item.dosage ?? "",
+          route: item.route ?? "Oral",
+          frequency: item.frequency ?? "",
+          duration: String(item.durationDays),
+          instructions: item.instructions ?? "",
+        })))
+        setRefillNumber(prescription.refillNumber ?? 0)
+      }
+    }).catch((cause) => setRequestError(cause instanceof Error ? cause.message : "Unable to load prescriptions"))
   }, [remoteConsultation])
 
   React.useEffect(() => {
     if (!remoteConsultation) return
     const remoteVitals = remoteConsultation.vitalsJson ?? {}
-    setVitals({ bp: remoteVitals.bp_systolic && remoteVitals.bp_diastolic ? `${remoteVitals.bp_systolic}/${remoteVitals.bp_diastolic}` : "", temperature: remoteVitals.temperature?.toString() ?? "", pulse: remoteVitals.pulse?.toString() ?? "", weight: remoteVitals.weight?.toString() ?? "", spo2: remoteVitals.oxygen_saturation?.toString() ?? "" })
+    setVitals({ bp: remoteVitals.bp_systolic && remoteVitals.bp_diastolic ? `${remoteVitals.bp_systolic}/${remoteVitals.bp_diastolic}` : "", temperature: remoteVitals.temperature?.toString() ?? "", pulse: remoteVitals.pulse?.toString() ?? "", weight: remoteVitals.weight?.toString() ?? "", spo2: remoteVitals.oxygen_saturation?.toString() ?? "", respiratoryRate: remoteVitals.respiratory_rate?.toString() ?? "" })
     setChiefComplaint(remoteConsultation.chiefComplaint ?? "")
     setClinicalNotes(remoteConsultation.clinicalNotes ?? "")
     setDiagnosis(remoteConsultation.diagnosis ?? "")
+    setFindings(remoteConsultation.findings ?? "")
     setFollowUp(remoteConsultation.followUpDate?.slice(0, 10) ?? "")
     setReferral(remoteConsultation.referral ?? "")
     setStatus(remoteConsultation.prescriptionStatus === "DRAFT" ? "Draft" : "Signed")
+    setCompleted(remoteConsultation.prescriptionStatus === "COMPLETED")
   }, [remoteConsultation])
 
   if (!patient) {
@@ -97,7 +142,17 @@ export default function DoctorConsultation() {
   const locked = status === "Signed" || (remoteConsultation !== null && remoteConsultation.prescriptionStatus !== "DRAFT")
 
   if (loading) return <Card><CardContent className="p-6 text-sm text-[var(--cp-ink-soft)]">Loading consultation...</CardContent></Card>
-  if (requestError) return <Card><CardContent className="p-6"><p role="alert" className="text-sm text-[var(--cp-critical)]">{requestError}</p></CardContent></Card>
+  if (requestError) return (
+    <Card>
+      <CardContent className="flex flex-col gap-4 p-6">
+        <p role="alert" className="text-sm text-[var(--cp-critical)]">{requestError}</p>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => setRetryKey((key) => key + 1)}>Retry</Button>
+          <Button variant="outline" onClick={() => navigate("/dashboard")}>Go Back to Dashboard</Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
 
   function addPrescriptionRow() {
     setPrescriptions((p) => [...p, { id: generateId("rx"), medicine: "", dosage: "", route: "Oral", frequency: "", duration: "", instructions: "" }])
@@ -118,7 +173,7 @@ export default function DoctorConsultation() {
   function buildConsultation(finalStatus: Consultation["status"]): Consultation {
     return {
       id: existing?.id ?? generateId("cons"),
-      appointmentId: appointmentId ?? "new",
+      appointmentId: activeAppointmentId ?? "",
       mrNumber: patient!.mrNumber,
       patientName: patient!.name,
       doctorId: appointment?.doctorId ?? "",
@@ -134,7 +189,7 @@ export default function DoctorConsultation() {
   function consultationPayload() {
     const [systolic, diastolic] = vitals.bp.split("/").map(Number)
     const numeric = (value: string) => value ? Number(value) : undefined
-    return { appointmentId: appointmentId ?? "", chiefComplaint: chiefComplaint || undefined, vitals: { bp_systolic: systolic || undefined, bp_diastolic: diastolic || undefined, temperature: numeric(vitals.temperature), pulse: numeric(vitals.pulse), weight: numeric(vitals.weight), oxygen_saturation: numeric(vitals.spo2) }, diagnosis: diagnosis || undefined, clinicalNotes: clinicalNotes || undefined, followUpDate: followUp || undefined, referral: referral || undefined }
+    return { appointmentId: activeAppointmentId ?? "", chiefComplaint: chiefComplaint || undefined, vitals: { bp_systolic: systolic || undefined, bp_diastolic: diastolic || undefined, temperature: numeric(vitals.temperature), pulse: numeric(vitals.pulse), weight: numeric(vitals.weight), oxygen_saturation: numeric(vitals.spo2), respiratory_rate: numeric(vitals.respiratoryRate) }, diagnosis: diagnosis || undefined, findings: findings || undefined, clinicalNotes: clinicalNotes || undefined, followUpDate: followUp || undefined, referral: referral || undefined }
   }
 
   async function createLinkedOrders(consultationId: string) {
@@ -171,6 +226,7 @@ export default function DoctorConsultation() {
       const existingPrescription = remotePrescription ?? (await api.listPrescriptions()).find((item) => item.consultationId === consultation.id)
       const prescription = existingPrescription ?? await api.createPrescription({
         consultationId: consultation.id,
+        padData: { visitNumber: appointment?.token?.toString(), visitDate: getHospitalDateKey(), visitTime: appointment?.time, relationship: "", patientAddress: patient!.address, patientContact: patient!.phone, patientAge: patient!.age, patientGender: patient!.gender.toUpperCase() as "MALE" | "FEMALE" | "OTHER", patientWeight: vitals.weight, vitals: { bp: vitals.bp, pulse: vitals.pulse, temperature: vitals.temperature, respiratory_rate: vitals.respiratoryRate, weight: vitals.weight }, allergies: patient!.allergies.join(", "), presentingComplaints: chiefComplaint, history: patient!.notes, findings, investigations: [...labRecs.map((id) => labTests.find((test) => test.id === id)?.testName ?? id), ...ultrasoundRecs].join(", "), refillNumber },
         items: prescriptions.map((item) => ({ medicineId: item.medicineId, medicineName: item.medicine.trim(), dosage: item.dosage.trim(), route: item.route, frequency: item.frequency.trim(), durationDays: Number.parseInt(item.duration, 10), instructions: item.instructions?.trim() || undefined })),
       })
       const signedPrescription = prescription.status === "DRAFT" ? await api.signPrescription(prescription.id) : prescription
@@ -182,11 +238,18 @@ export default function DoctorConsultation() {
     } catch (error) { toast({ title: "Sign failed", description: (error as ApiError).message, variant: "error" }) }
   }
 
-  function completeConsultation() {
+  async function completeConsultation() {
     if (status !== "Signed") { toast({ title: "Sign the prescription first", description: "The consultation can be completed after signing.", variant: "error" }); return }
-    const c = buildConsultation(status)
+    if (!remoteConsultation) { toast({ title: "Save the consultation first", description: "The consultation record is not available yet.", variant: "error" }); return }
+    try {
+      await api.completeConsultation(remoteConsultation.id)
+    } catch (error) {
+      toast({ title: "Completion failed", description: (error as ApiError).message, variant: "error" })
+      return
+    }
+    const c = buildConsultation("Signed")
     dispatch({ type: "SAVE_CONSULTATION", consultation: c })
-    if (appointmentId) dispatch({ type: "UPDATE_APPOINTMENT_STATUS", id: appointmentId, status: "Done" })
+    if (activeAppointmentId) dispatch({ type: "UPDATE_APPOINTMENT_STATUS", id: activeAppointmentId, status: "Done" })
     dispatch({
       type: "ADD_TIMELINE_EVENT",
       event: { id: generateId("tl"), mrNumber: patient!.mrNumber, stage: "OPD Consultation", datetime: new Date().toISOString(), department: appointment?.department ?? "OPD", staff: appointment?.doctorName ?? "Doctor", status: "Completed", details: diagnosis || "Consultation completed." },
@@ -195,10 +258,15 @@ export default function DoctorConsultation() {
     setCompleted(true)
   }
 
-  function printPrescription() {
+  async function printPrescription() {
     if (!completed || status !== "Signed") return
     const currentPatient = patient
     if (!currentPatient) return
+    const prescription = remotePrescription
+    const refNo = prescription?.id ?? remoteConsultation?.id ?? activeAppointmentId ?? "PRESCRIPTION"
+    const qrCode = await QRCode.toDataURL(refNo, { width: 150, margin: 1 })
+    const esc = (value: unknown) => String(value ?? "-").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character)
+    const value = (text: unknown) => esc(text || "-")
     const items = remotePrescription?.items ?? prescriptions
     const rows = items.map((item) => {
       const remoteItem = "medicineName" in item
@@ -206,13 +274,75 @@ export default function DoctorConsultation() {
       const dosage = item.dosage ?? ""
       const frequency = item.frequency ?? ""
       const duration = remoteItem ? (item.durationDays ? `${item.durationDays} days` : "") : item.duration
-      return `<tr><td>${medicineName}</td><td>${dosage}</td><td>${frequency}</td><td>${duration}</td><td>${item.instructions ?? ""}</td></tr>`
+      return `<tr><td><strong>${value(medicineName)}</strong><br><small>${value(item.route)}</small></td><td>${value(dosage)}</td><td>${value(frequency)}</td><td>${value(duration)}</td><td>${value(item.instructions)}</td></tr>`
     }).join("")
     const tests = labRecs.map((id) => labTests.find((test) => test.id === id)?.testName ?? id).join(", ")
     const ultrasound = ultrasoundRecs.join(", ")
+    const signedAt = prescription?.signedAt ?? remoteConsultation?.signedAt ?? new Date().toISOString()
+    const doctorName = currentUser?.name ?? appointment?.doctorName ?? "Doctor"
+    const relationship = currentPatient.emergencyContact ? `S/o D/o W/o: ${currentPatient.emergencyContact}` : ""
+    const assetDataUrl = async (url?: string | null) => {
+      if (!url) return null
+      try {
+        const accessToken = getAccessToken()
+        const response = await fetch(apiAssetUrl(url), { headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined })
+        if (!response.ok) return null
+        const blob = await response.blob()
+        return await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result))
+          reader.onerror = () => reject(reader.error)
+          reader.readAsDataURL(blob)
+        })
+      } catch {
+        return null
+      }
+    }
+    const [signatureDataUrl, stampDataUrl] = await Promise.all([assetDataUrl(doctorProfile?.signatureUrl), assetDataUrl(doctorProfile?.stampUrl)])
+    const profileImage = (dataUrl: string, alt: string) => `<img class="profile-image" src="${esc(dataUrl)}" alt="${esc(alt)}">`
+    const dispensingStamp = hospitalProfile.dispensingStampText?.trim()
+    const signatureBlocks = [
+      signatureDataUrl ? `<div class="signature">${profileImage(signatureDataUrl, "Doctor signature")}<small>Doctor's Signature</small></div>` : "",
+      stampDataUrl ? `<div class="signature">${profileImage(stampDataUrl, "Doctor stamp")}<small>Doctor's Stamp</small></div>` : "",
+    ].filter(Boolean).join("")
     const printWindow = window.open("", "_blank", "width=900,height=1000")
     if (!printWindow) return
-    printWindow.document.write(`<html><head><title>Prescription - ${currentPatient.name}</title><style>body{font:14px Arial;color:#17212b;margin:42px}header{text-align:center;border-bottom:2px solid #1d6b63;padding-bottom:18px}h1{margin:0;color:#1d6b63}h2{font-size:16px;border-bottom:1px solid #ccd6d5;padding-bottom:6px;margin-top:26px}table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid #dbe3e2;padding:9px 6px;vertical-align:top}footer{margin-top:45px;border-top:1px solid #ccd6d5;padding-top:12px;font-size:12px}</style></head><body><header><h1>Khalida Medicare Hospital</h1><div>Compassionate Care, Modern Medicine</div><div>12-B Gulberg III, Lahore | +92 42 3587 4210</div></header><h2>Patient</h2><p><b>${currentPatient.name}</b> | ${currentPatient.age} yrs | ${currentPatient.gender} | Patient ID: ${currentPatient.mrNumber}<br>Consultation date: ${formatDate(new Date().toISOString())}</p><h2>Clinical Summary</h2><p><b>Chief complaint:</b> ${chiefComplaint || "-"}<br><b>Diagnosis:</b> ${diagnosis || "-"}</p><h2>Medicines</h2><table><thead><tr><th>Name</th><th>Dosage</th><th>Frequency</th><th>Duration</th><th>Instructions</th></tr></thead><tbody>${rows}</tbody></table>${tests ? `<h2>Suggested Lab Tests</h2><p>${tests}</p>` : ""}${ultrasound ? `<h2>Suggested Ultrasound</h2><p>${ultrasound}</p>` : ""}<footer><p><b>Doctor:</b> ${appointment?.doctorName ?? "Assigned doctor"}</p><p><b>Signature:</b> Electronically signed</p><p><b>Signed on:</b> ${remotePrescription?.signedAt ? new Date(remotePrescription.signedAt).toLocaleString() : new Date().toLocaleString()}</p><p>For follow-up and appointments, please contact the hospital reception desk.</p></footer><script>window.onload=()=>window.print()</script></body></html>`)
+
+    const triggerPrint = () => {
+      const images = Array.from(printWindow.document.images)
+      if (images.length === 0) {
+        printWindow.focus()
+        printWindow.print()
+        return
+      }
+
+      let remaining = images.length
+      const finalize = () => {
+        remaining -= 1
+        if (remaining <= 0) {
+          printWindow.focus()
+          printWindow.print()
+        }
+      }
+
+      images.forEach((image) => {
+        if (image.complete) {
+          finalize()
+          return
+        }
+        image.addEventListener("load", finalize, { once: true })
+        image.addEventListener("error", finalize, { once: true })
+      })
+    }
+
+    printWindow.document.write(`<html><head><title>Prescription - ${value(currentPatient.name)}</title><style>
+      @page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#17212b;margin:0;font-size:11px;line-height:1.35}.sheet{max-width:190mm;margin:auto}.header{display:grid;grid-template-columns:1fr 1fr;gap:18px;border-bottom:2px solid #1d6b63;padding-bottom:10px}.hospital h1{font-size:24px;color:#1d6b63;margin:0 0 4px}.hospital p,.doctor p{margin:2px 0}.doctor{text-align:right}.doctor h2{font-size:16px;margin:0 0 3px;color:#1d6b63}.qr{display:flex;justify-content:flex-end;align-items:center;gap:6px;margin-top:5px}.qr img{width:58px;height:58px}.ref{font-size:9px;word-break:break-all}.patient-bar{margin:10px 0;padding:8px 10px;background:#e7f3f1;border:1px solid #acd3cd;border-radius:3px;display:grid;grid-template-columns:repeat(4,1fr);gap:4px 12px}.patient-bar strong{color:#0f554e}.columns{display:grid;grid-template-columns:34% 66%;gap:14px;margin-top:10px}.section{margin-bottom:11px}.section h3{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:#1d6b63;border-bottom:1px solid #b9cfcc;padding-bottom:3px;margin:0 0 5px}.section p{margin:3px 0;white-space:pre-wrap}.vitals{display:grid;grid-template-columns:1fr 1fr;gap:3px}.vital{border:1px solid #d5e2e0;padding:4px}.vital b{display:block;font-size:9px;color:#55706d}.rx-table{width:100%;border-collapse:collapse}.rx-table th,.rx-table td{text-align:left;border-bottom:1px solid #d5e2e0;padding:5px 4px;vertical-align:top}.rx-table th{background:#f0f6f5;font-size:10px}.rx-table small{color:#55706d}.footer{border-top:1px solid #b9cfcc;margin-top:16px;padding-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:20px}.stamp-box{height:70px;width:150px;border:1px dashed #91aaa6;display:flex;align-items:center;justify-content:center;color:#718784;font-size:10px}.signatures{display:flex;justify-content:flex-end;gap:18px;text-align:center}.signature{min-width:105px}.profile-image{height:55px;max-width:125px;object-fit:contain;display:block;margin:auto}.signature-line{height:55px;border-bottom:1px solid #7f9995}.bottom{grid-column:1/-1;border-top:1px solid #d5e2e0;margin-top:5px;padding-top:6px;display:flex;justify-content:space-between;gap:12px;font-size:10px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+    </style></head><body><main class="sheet">
+      <header class="header"><div class="hospital">${hospitalProfile.logoUrl ? `<img src="${esc(apiAssetUrl(hospitalProfile.logoUrl))}" alt="" style="max-height:42px;max-width:150px;object-fit:contain">` : ""}<h1>${value(hospitalProfile.name)}</h1><p>${value(hospitalProfile.address)}</p><p>${value(hospitalProfile.phone)}${hospitalProfile.email ? ` | ${value(hospitalProfile.email)}` : ""}</p><p>PM&DC Reg No.: ${value(hospitalProfile.pmdcRegistrationNo)} | PHC Reg No.: ${value(hospitalProfile.phcRegistrationNo)} | PHC RL No.: ${value(hospitalProfile.phcRlNo)}</p></div><div class="doctor"><h2>${value(doctorName)}</h2><p>${value(doctorProfile?.qualification)}</p><p>${value(doctorProfile?.specialization)}</p><div class="qr"><div class="ref">Ref No.<br><strong>${value(refNo)}</strong></div><img src="${qrCode}" alt="Verification QR code"></div></div></header>
+      <section class="patient-bar"><div><strong>Patient:</strong> ${value(currentPatient.name)}</div><div><strong>${value(relationship)}</strong></div><div><strong>Visit No.:</strong> ${value(appointment?.token)}</div><div><strong>Date:</strong> ${value(formatDate(appointment?.date ?? new Date().toISOString()))}</div><div><strong>Time:</strong> ${value(appointment?.time)}</div><div><strong>Address:</strong> ${value(currentPatient.address)}</div><div><strong>Contact:</strong> ${value(currentPatient.phone)}</div><div><strong>MR No.:</strong> ${value(currentPatient.mrNumber)}</div></section>
+      <div class="columns"><aside><section class="section"><h3>Vitals</h3><div class="vitals"><div class="vital"><b>BP</b>${value(vitals.bp)}</div><div class="vital"><b>Pulse</b>${value(vitals.pulse)}</div><div class="vital"><b>Temperature</b>${value(vitals.temperature)}</div><div class="vital"><b>RR</b>${value(vitals.respiratoryRate)}</div><div class="vital"><b>Weight</b>${value(vitals.weight)}</div><div class="vital"><b>SpO2</b>${value(vitals.spo2)}</div></div></section><section class="section"><h3>Allergies</h3><p>${value(currentPatient.allergies.join(", "))}</p></section><section class="section"><h3>Presenting Complaints</h3><p>${value(chiefComplaint)}</p></section><section class="section"><h3>History</h3><p>${value(currentPatient.notes)}</p></section><section class="section"><h3>Findings</h3><p>${value(findings)}</p></section><section class="section"><h3>Investigations</h3><p>${value([tests, ultrasound].filter(Boolean).join(", "))}</p></section></aside><section><section class="section"><h3>Patient Assessment</h3><p><strong>Age:</strong> ${value(currentPatient.age)} &nbsp; <strong>Gender:</strong> ${value(currentPatient.gender)} &nbsp; <strong>Weight:</strong> ${value(vitals.weight)}</p></section><section class="section"><h3>Provisional / Diagnosis</h3><p>${value(diagnosis)}</p></section><section class="section"><h3>Rx</h3><table class="rx-table"><thead><tr><th>Medicine</th><th>Dosage</th><th>Frequency</th><th>Duration</th><th>Instructions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No medicines prescribed</td></tr>`}</tbody></table></section></section></div>
+      <footer class="footer">${dispensingStamp ? `<div><p><strong>Dispensing Stamp</strong></p><div class="stamp-box">${value(dispensingStamp)}</div></div>` : ""}${signatureBlocks ? `<div class="signatures">${signatureBlocks}</div>` : ""}<div class="bottom"><span>${value(hospitalProfile.refillText || `Refills: ${refillNumber}`)} | Refill selected: ${refillNumber}</span><span>${value(hospitalProfile.phone)} | ${value(hospitalProfile.clinicDaysTimings)}</span><span>Signed: ${value(new Date(signedAt).toLocaleString())}</span></div></footer>
+    </main><script>window.onload=()=>window.print()</script></body></html>`)
     printWindow.document.close()
   }
 
@@ -247,7 +377,7 @@ export default function DoctorConsultation() {
           </button>
           {historyOpen && (
             <div className="mt-2 rounded-lg bg-[var(--cp-bg)] p-3 text-sm text-[var(--cp-ink-soft)]">
-              {patient.lastVisit ? `Last visit on ${formatDate(patient.lastVisit)}.` : "No previous visits recorded."} Blood group {patient.bloodGroup}. {patient.notes ?? ""}
+              {patient.lastVisit ? `Last visit on ${formatDate(patient.lastVisit)}.` : "No previous visits recorded."} Blood group {formatBloodGroup(patient.bloodGroup)}. {patient.notes ?? ""}
             </div>
           )}
         </CardContent>
@@ -256,11 +386,11 @@ export default function DoctorConsultation() {
       {/* Vitals */}
       <Card>
         <CardHeader><CardTitle>Vitals</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-          {([["bp", "BP (mmHg)"], ["temperature", "Temp (°F)"], ["pulse", "Pulse (bpm)"], ["weight", "Weight (kg)"], ["spo2", "SpO2 (%)"]] as [keyof VitalSigns, string][]).map(([key, label]) => (
-            <div key={key}>
-              <Label htmlFor={`v-${key}`}>{label}</Label>
-              <Input id={`v-${key}`} disabled={locked} value={vitals[key]} onChange={(e) => setVitals((v) => ({ ...v, [key]: e.target.value }))} className="cp-tabular" />
+        <CardContent className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-6">
+          {([["bp", "BP (mmHg)"], ["pulse", "Pulse (bpm)"], ["temperature", "Temp (°F)"], ["respiratoryRate", "RR (/min)"], ["weight", "Weight (kg)"], ["spo2", "SpO2 (%)"]] as [keyof VitalSigns, string][]).map(([key, label]) => (
+            <div key={key} className="min-w-0">
+              <Label className="text-xs" htmlFor={`v-${key}`}>{label}</Label>
+              <Input id={`v-${key}`} disabled={locked} value={vitals[key]} onChange={(e) => setVitals((v) => ({ ...v, [key]: e.target.value }))} className="cp-tabular h-8 min-h-0 px-2 text-sm" />
             </div>
           ))}
         </CardContent>
@@ -277,6 +407,10 @@ export default function DoctorConsultation() {
           <div>
             <Label htmlFor="dx">Diagnosis</Label>
             <Textarea id="dx" disabled={locked} value={diagnosis} onChange={(e) => setDiagnosis(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="findings">Findings</Label>
+            <Textarea id="findings" disabled={locked} value={findings} onChange={(e) => setFindings(e.target.value)} placeholder="Examination findings" />
           </div>
           <div className="sm:col-span-2">
             <Label htmlFor="notes">Clinical Notes</Label>
@@ -295,6 +429,7 @@ export default function DoctorConsultation() {
           {!locked && <Button variant="outline" size="sm" onClick={addPrescriptionRow}><Plus className="h-4 w-4" /> Add Medicine</Button>}
         </CardHeader>
         <CardContent>
+          <div className="mb-4 max-w-xs"><Label htmlFor="refill-number">Refill Number</Label><Select id="refill-number" disabled={locked} value={String(refillNumber)} onChange={(event) => setRefillNumber(Number(event.target.value))}>{[0, 1, 2, 3, 4].map((value) => <option key={value} value={value}>{value}</option>)}</Select></div>
           {prescriptions.length === 0 ? (
             <p className="text-sm text-[var(--cp-ink-soft)]">No medicines added yet.</p>
           ) : (
@@ -375,7 +510,7 @@ export default function DoctorConsultation() {
       <div className="sticky bottom-3 flex flex-wrap justify-end gap-2 rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-3 cp-shadow print:hidden">
         <Button variant="outline" size="sm" onClick={saveDraft} disabled={locked}><Save className="h-4 w-4" /> Save Draft</Button>
         <Button variant="outline" size="sm" onClick={signPrescription} disabled={locked}><PenLine className="h-4 w-4" /> Sign Prescription</Button>
-        <Button size="sm" onClick={completeConsultation}><CheckCircle2 className="h-4 w-4" /> Complete Consultation</Button>
+        <Button size="sm" onClick={completeConsultation} disabled={completed}><CheckCircle2 className="h-4 w-4" /> {completed ? "Consultation Completed" : "Complete Consultation"}</Button>
       </div>
     </div>
   )

@@ -71,31 +71,39 @@ export function BarChartWidget({
   height?: number
 }) {
   const width = 560
-  const padding = { top: 16, right: 16, bottom: 28, left: 40 }
+  const padding = { top: 24, right: 16, bottom: 48, left: 52 }
+  const [hover, setHover] = React.useState<number | null>(null)
+  if (data.length === 0) return <p className="flex h-[200px] items-center justify-center text-sm text-[var(--cp-ink-soft)]">No data available.</p>
   const max = Math.max(...data.map((d) => d.value), 1)
   const innerW = width - padding.left - padding.right
   const innerH = height - padding.top - padding.bottom
   const gap = 10
   const barW = data.length > 0 ? innerW / data.length - gap : 0
-  const [hover, setHover] = React.useState<number | null>(null)
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="Bar chart">
       {[0, 0.5, 1].map((t) => (
-        <line key={t} x1={padding.left} x2={width - padding.right} y1={padding.top + innerH * t} y2={padding.top + innerH * t} stroke="var(--cp-border)" strokeDasharray="4 4" />
+        <g key={t}>
+          <line x1={padding.left} x2={width - padding.right} y1={padding.top + innerH * (1 - t)} y2={padding.top + innerH * (1 - t)} stroke="var(--cp-border)" strokeDasharray={t === 0 ? undefined : "4 4"} />
+          <text x={padding.left - 8} y={padding.top + innerH * (1 - t) + 3} textAnchor="end" fontSize="10" fill="var(--cp-ink-soft)">{Math.round(max * t).toLocaleString()}</text>
+        </g>
       ))}
+      <line x1={padding.left} x2={width - padding.right} y1={padding.top + innerH} y2={padding.top + innerH} stroke="var(--cp-ink-soft)" />
       {data.map((d, i) => {
         const barH = (d.value / max) * innerH
         const x = padding.left + i * (barW + gap) + gap / 2
         const y = padding.top + innerH - barH
+        const label = d.label.length > 16 ? `${d.label.slice(0, 15)}…` : d.label
         return (
           <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
             <rect x={x} y={y} width={barW} height={barH} rx={5} fill={hover === i ? "var(--cp-accent)" : "var(--cp-primary)"} />
-            <text x={x + barW / 2} y={height - 6} textAnchor="middle" fontSize="10" fill="var(--cp-ink-soft)">{d.label}</text>
+            <title>{`${d.label}: ${d.value.toLocaleString()}`}</title>
+            <text x={x + barW / 2} y={height - 26} textAnchor="middle" fontSize="9" fill="var(--cp-ink-soft)">{label}</text>
+            <text x={x + barW / 2} y={Math.max(padding.top + 10, y - 6)} textAnchor="middle" fontSize="10" fontWeight={700} fill="var(--cp-ink)">{d.value.toLocaleString()}</text>
             {hover === i && (
               <g>
-                <rect x={x + barW / 2 - 26} y={y - 24} width={52} height={20} rx={5} fill="var(--cp-ink)" />
-                <text x={x + barW / 2} y={y - 10} textAnchor="middle" fontSize="10" fill="white" fontWeight={600}>{d.value.toLocaleString()}</text>
+                <rect x={x + barW / 2 - 42} y={Math.max(2, y - 48)} width={84} height={22} rx={5} fill="var(--cp-ink)" />
+                <text x={x + barW / 2} y={Math.max(17, y - 33)} textAnchor="middle" fontSize="10" fill="white" fontWeight={600}>{d.value.toLocaleString()}</text>
               </g>
             )}
           </g>
@@ -114,13 +122,14 @@ export function DonutChartWidget({
   data: { label: string; value: number }[]
   size?: number
 }) {
+  const [hover, setHover] = React.useState<number | null>(null)
+  if (data.length === 0) return <p className="flex h-[180px] items-center justify-center text-sm text-[var(--cp-ink-soft)]">No data available.</p>
   const total = data.reduce((s, d) => s + d.value, 0) || 1
   const radius = size / 2 - 14
   const cx = size / 2
   const cy = size / 2
   const circumference = 2 * Math.PI * radius
   let offset = 0
-  const [hover, setHover] = React.useState<number | null>(null)
 
   return (
     <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">

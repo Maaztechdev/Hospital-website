@@ -21,6 +21,7 @@ const validAdmission = {
 
 let admin: Awaited<ReturnType<typeof prisma.user.create>>;
 let nurse: Awaited<ReturnType<typeof prisma.user.create>>;
+let receptionist: Awaited<ReturnType<typeof prisma.user.create>>;
 let doctorA: Awaited<ReturnType<typeof prisma.user.create>>;
 let doctorB: Awaited<ReturnType<typeof prisma.user.create>>;
 let department: Awaited<ReturnType<typeof prisma.department.create>>;
@@ -28,6 +29,7 @@ let profileA: Awaited<ReturnType<typeof prisma.doctor.create>>;
 let profileB: Awaited<ReturnType<typeof prisma.doctor.create>>;
 let patient: Awaited<ReturnType<typeof prisma.patient.create>>;
 let unrelatedPatient: Awaited<ReturnType<typeof prisma.patient.create>>;
+let concurrentPatient: Awaited<ReturnType<typeof prisma.patient.create>>;
 let ward: Awaited<ReturnType<typeof prisma.ward.create>>;
 let room: Awaited<ReturnType<typeof prisma.room.create>>;
 let availableBed: Awaited<ReturnType<typeof prisma.bed.create>>;
@@ -49,6 +51,7 @@ describe("Ward admission validation", () => {
     expect(admitPatientSchema.safeParse({ ...validAdmission, depositAmount: 1_000_001 }).success).toBe(false);
     expect(admitPatientSchema.safeParse({ ...validAdmission, depositAmount: 0.5 }).success).toBe(false);
     expect(admitPatientSchema.safeParse(validAdmission).success).toBe(true);
+    expect(admitPatientSchema.safeParse({ ...validAdmission, depositAmount: undefined }).success).toBe(false);
     const { admissionType: _admissionType, ...missingType } = validAdmission;
     expect(admitPatientSchema.safeParse(missingType).success).toBe(false);
   });
@@ -62,11 +65,12 @@ describe("Ward admission validation", () => {
 describe("Ward admission authorization and bed concurrency", () => {
   beforeAll(async () => {
     const passwordHash = await argon2.hash(password);
-    [admin, nurse, doctorA, doctorB] = await Promise.all([
+    [admin, nurse, doctorA, doctorB, receptionist] = await Promise.all([
       prisma.user.create({ data: { name: `Ward Admin ${suffix}`, email: `ward-admin-${suffix}@test.local`, passwordHash, role: "ADMIN" } }),
       prisma.user.create({ data: { name: `Ward Nurse ${suffix}`, email: `ward-nurse-${suffix}@test.local`, passwordHash, role: "NURSE" } }),
       prisma.user.create({ data: { name: `Ward Doctor A ${suffix}`, email: `ward-doctor-a-${suffix}@test.local`, passwordHash, role: "DOCTOR" } }),
       prisma.user.create({ data: { name: `Ward Doctor B ${suffix}`, email: `ward-doctor-b-${suffix}@test.local`, passwordHash, role: "DOCTOR" } }),
+      prisma.user.create({ data: { name: `Ward Reception ${suffix}`, email: `ward-reception-${suffix}@test.local`, passwordHash, role: "RECEPTIONIST" } }),
     ]);
     department = await prisma.department.create({ data: { name: `Ward Admission ${suffix}` } });
     [profileA, profileB] = await Promise.all([
@@ -78,6 +82,9 @@ describe("Ward admission authorization and bed concurrency", () => {
     });
     unrelatedPatient = await prisma.patient.create({
       data: { mrNumber: `MR-WARD-X-${suffix}`, firstName: "Unrelated", lastName: "Patient", age: 35, gender: "OTHER", phone: `0301${Date.now().toString().slice(-7)}`, createdBy: admin.id },
+    });
+    concurrentPatient = await prisma.patient.create({
+      data: { mrNumber: `MR-WARD-C-${suffix}`, firstName: "Concurrent", lastName: "Patient", age: 35, gender: "OTHER", phone: `0302${Date.now().toString().slice(-7)}`, createdBy: admin.id },
     });
     ward = await prisma.ward.create({ data: { wardName: `Ward Admission ${suffix}`, wardType: "GENERAL", dailyRate: 5000, capacity: 4 } });
     room = await prisma.room.create({ data: { wardId: ward.id, roomNumber: `WA-${suffix}` } });
@@ -103,11 +110,15 @@ describe("Ward admission authorization and bed concurrency", () => {
   });
 
   afterAll(async () => {
-    if (admin && nurse && doctorA && doctorB) {
-      await prisma.auditLog.deleteMany({ where: { userId: { in: [admin.id, nurse.id, doctorA.id, doctorB.id] }, module: "wards" } });
-      await prisma.auditLog.deleteMany({ where: { userId: { in: [admin.id, nurse.id, doctorA.id, doctorB.id] }, module: "ot" } });
+    if (admin && nurse && doctorA && doctorB && receptionist) {
+      await prisma.auditLog.deleteMany({ where: { userId: { in: [admin.id, nurse.id, doctorA.id, doctorB.id, receptionist.id] }, module: "wards" } });
+      await prisma.auditLog.deleteMany({ where: { userId: { in: [admin.id, nurse.id, doctorA.id, doctorB.id, receptionist.id] }, module: "ot" } });
     }
-    if (patient) await prisma.admission.deleteMany({ where: { patientId: patient.id } });
+    if (patient || unrelatedPatient || concurrentPatient) {
+      const patientIds = [patient?.id, unrelatedPatient?.id, concurrentPatient?.id].filter((id): id is string => Boolean(id));
+      await prisma.patientLedgerEntry.deleteMany({ where: { patientId: { in: patientIds } } });
+      await prisma.admission.deleteMany({ where: { patientId: { in: patientIds } } });
+    }
     if (patient) await prisma.surgery.deleteMany({ where: { patientId: patient.id } });
     if (availableBed && occupiedBed && concurrentBed && ownPatientBed) {
       await prisma.bed.deleteMany({ where: { id: { in: [availableBed.id, occupiedBed.id, concurrentBed.id, ownPatientBed.id] } } });
@@ -117,8 +128,9 @@ describe("Ward admission authorization and bed concurrency", () => {
     if (otRoom) await prisma.otRoom.delete({ where: { id: otRoom.id } });
     if (patient) await prisma.patient.delete({ where: { id: patient.id } });
     if (unrelatedPatient) await prisma.patient.delete({ where: { id: unrelatedPatient.id } });
+    if (concurrentPatient) await prisma.patient.delete({ where: { id: concurrentPatient.id } });
     if (profileA && profileB) await prisma.doctor.deleteMany({ where: { id: { in: [profileA.id, profileB.id] } } });
-    if (admin && nurse && doctorA && doctorB) await prisma.user.deleteMany({ where: { id: { in: [admin.id, nurse.id, doctorA.id, doctorB.id] } } });
+    if (admin && nurse && doctorA && doctorB && receptionist) await prisma.user.deleteMany({ where: { id: { in: [admin.id, nurse.id, doctorA.id, doctorB.id, receptionist.id] } } });
     if (department) await prisma.department.delete({ where: { id: department.id } });
     redis.disconnect();
   });
@@ -139,15 +151,42 @@ describe("Ward admission authorization and bed concurrency", () => {
     const nurseAdmission = await request(app)
       .post("/api/v1/wards/admissions")
       .set("Authorization", `Bearer ${nurseToken}`)
-      .send(admissionInput(availableBed.id, profileB.id));
+      .send({ ...admissionInput(availableBed.id, profileB.id), patientId: unrelatedPatient.id });
     expect(nurseAdmission.status).toBe(201);
 
     const doctorToken = await login(doctorA.email);
     const ownPatientAdmission = await request(app)
       .post("/api/v1/wards/admissions")
       .set("Authorization", `Bearer ${doctorToken}`)
-      .send(admissionInput(ownPatientBed.id, profileB.id));
+      .send({ ...admissionInput(ownPatientBed.id, profileB.id), depositAmount: "not-a-deposit", dailyRate: -1, expectedStayDays: 0, admissionNotes: "Clinically stable for ward observation" });
     expect(ownPatientAdmission.status).toBe(201);
+    expect(ownPatientAdmission.body.data).toEqual(expect.objectContaining({
+      depositAmount: "0",
+      depositStatus: "PENDING",
+      dailyRate: "5000",
+      admissionNotes: "Clinically stable for ward observation",
+    }));
+    expect(await prisma.patientLedgerEntry.count({ where: { admissionId: ownPatientAdmission.body.data.id, type: "ADVANCE_DEPOSIT" } })).toBe(0);
+    const receptionistToken = await login(receptionist.email);
+    const recordedDeposit = await request(app)
+      .post(`/api/v1/wards/admissions/${ownPatientAdmission.body.data.id}/deposits`)
+      .set("Authorization", "Bearer " + receptionistToken)
+      .send({ amount: 10_000, paymentMethod: "CASH" });
+    expect(recordedDeposit.status).toBe(201);
+    expect(recordedDeposit.body.data).toEqual(expect.objectContaining({ depositAmount: "10000", depositStatus: "PAID" }));
+    const duplicateAdmission = await request(app)
+      .post("/api/v1/wards/admissions")
+      .set("Authorization", "Bearer " + doctorToken)
+      .send(admissionInput(concurrentBed.id, profileA.id));
+    expect(duplicateAdmission.status).toBe(409);
+    expect(duplicateAdmission.body.message).toBe("Patient already has an active admission");
+    const profile = await request(app)
+      .get(`/api/v1/patients/${patient.id}/profile`)
+      .set("Authorization", "Bearer " + doctorToken);
+    expect(profile.status).toBe(200);
+    expect(profile.body.data.ledgerEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "ADVANCE_DEPOSIT", amount: "10000" }),
+    ]));
 
     const underAnotherDoctor = await request(app)
       .post("/api/v1/wards/admissions")
@@ -169,7 +208,7 @@ describe("Ward admission authorization and bed concurrency", () => {
 
   it("allows exactly one of two concurrent admissions to the same available bed", async () => {
     const doctorToken = await login(doctorA.email);
-    const input = admissionInput(concurrentBed.id, profileA.id);
+    const input = { ...admissionInput(concurrentBed.id, profileA.id), patientId: concurrentPatient.id };
     const responses = await Promise.all([
       request(app).post("/api/v1/wards/admissions").set("Authorization", `Bearer ${doctorToken}`).send(input),
       request(app).post("/api/v1/wards/admissions").set("Authorization", `Bearer ${doctorToken}`).send(input),
@@ -196,6 +235,7 @@ describe("Ward admission authorization and bed concurrency", () => {
       patientId: patient.id,
       otRoomId: otRoom.id,
       surgeryType: "Shared authorization regression",
+      anesthesiaType: "General",
       surgeonId: profileA.id,
       scheduledStart: scheduledStart.toISOString(),
       scheduledEnd: new Date(scheduledStart.getTime() + 60 * 60 * 1000).toISOString(),

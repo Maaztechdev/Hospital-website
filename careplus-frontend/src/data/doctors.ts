@@ -1,133 +1,16 @@
-export interface Doctor {
+﻿export interface Doctor {
   id: string
   name: string
-  departmentId: string
-  specialization: string
-  qualifications: string
-  experienceYears: number
-  languages: string[]
-  availability: string[]
-  rating: number
-  bio: string
-  photoSeed: string
+  departmentId?: string
+  specialization?: string
+  qualifications?: string
+  experienceYears?: number
+  languages?: string[]
+  availability?: string[]
+  rating?: number
+  bio?: string
+  photoSeed?: string
+  photoUrl?: string
 }
 
-export const doctors: Doctor[] = [
-  {
-    id: "dr-ayesha-khan",
-    name: "Dr. Ayesha Khan",
-    departmentId: "cardiology",
-    specialization: "Interventional Cardiologist",
-    qualifications: "MBBS, FCPS (Cardiology)",
-    experienceYears: 14,
-    languages: ["English", "Urdu"],
-    availability: ["Mon", "Wed", "Fri"],
-    rating: 4.9,
-    bio: "Dr. Khan specializes in angioplasty and complex coronary interventions, with over a decade at leading cardiac centers.",
-    photoSeed: "ayesha-khan",
-  },
-  {
-    id: "dr-imran-siddiqui",
-    name: "Dr. Imran Siddiqui",
-    departmentId: "neurology",
-    specialization: "Consultant Neurologist",
-    qualifications: "MBBS, FCPS (Neurology)",
-    experienceYears: 11,
-    languages: ["English", "Urdu"],
-    availability: ["Tue", "Thu", "Sat"],
-    rating: 4.8,
-    bio: "Dr. Siddiqui focuses on stroke management and epilepsy care, leading Khalida Medicare's rapid stroke-response protocol.",
-    photoSeed: "imran-siddiqui",
-  },
-  {
-    id: "dr-sana-malik",
-    name: "Dr. Sana Malik",
-    departmentId: "pediatrics",
-    specialization: "Consultant Pediatrician",
-    qualifications: "MBBS, FCPS (Pediatrics)",
-    experienceYears: 9,
-    languages: ["English", "Urdu", "Punjabi"],
-    availability: ["Mon", "Tue", "Wed", "Thu"],
-    rating: 5.0,
-    bio: "Dr. Malik has a gentle approach to newborn and childhood care, and leads immunization outreach programs.",
-    photoSeed: "sana-malik",
-  },
-  {
-    id: "dr-bilal-ahmed",
-    name: "Dr. Bilal Ahmed",
-    departmentId: "orthopedics",
-    specialization: "Orthopedic Surgeon",
-    qualifications: "MBBS, MS (Ortho)",
-    experienceYears: 16,
-    languages: ["English", "Urdu"],
-    availability: ["Mon", "Wed", "Sat"],
-    rating: 4.7,
-    bio: "Dr. Ahmed performs joint replacements and sports injury repairs, and has trained in minimally invasive techniques.",
-    photoSeed: "bilal-ahmed",
-  },
-  {
-    id: "dr-hina-raza",
-    name: "Dr. Hina Raza",
-    departmentId: "ophthalmology",
-    specialization: "Consultant Ophthalmologist",
-    qualifications: "MBBS, FCPS (Ophthalmology)",
-    experienceYears: 8,
-    languages: ["English", "Urdu"],
-    availability: ["Tue", "Thu"],
-    rating: 4.9,
-    bio: "Dr. Raza specializes in cataract surgery and LASIK, and runs Khalida Medicare's pediatric eye screening clinic.",
-    photoSeed: "hina-raza",
-  },
-  {
-    id: "dr-usman-farooq",
-    name: "Dr. Usman Farooq",
-    departmentId: "general-medicine",
-    specialization: "Consultant Physician",
-    qualifications: "MBBS, FCPS (Medicine)",
-    experienceYears: 13,
-    languages: ["English", "Urdu"],
-    availability: ["Mon", "Tue", "Wed", "Thu", "Fri"],
-    rating: 4.6,
-    bio: "Dr. Farooq manages chronic conditions such as diabetes and hypertension with a preventive-care focus.",
-    photoSeed: "usman-farooq",
-  },
-  {
-    id: "dr-zara-abbasi",
-    name: "Dr. Zara Abbasi",
-    departmentId: "surgery",
-    specialization: "General & Laparoscopic Surgeon",
-    qualifications: "MBBS, FCPS (Surgery)",
-    experienceYears: 12,
-    languages: ["English", "Urdu"],
-    availability: ["Wed", "Fri", "Sat"],
-    rating: 4.8,
-    bio: "Dr. Abbasi performs laparoscopic and emergency surgical procedures with a strong record in day-surgery recovery times.",
-    photoSeed: "zara-abbasi",
-  },
-  {
-    id: "dr-hamza-tariq",
-    name: "Dr. Hamza Tariq",
-    departmentId: "pulmonology",
-    specialization: "Consultant Pulmonologist",
-    qualifications: "MBBS, FCPS (Pulmonology)",
-    experienceYears: 10,
-    languages: ["English", "Urdu"],
-    availability: ["Mon", "Thu"],
-    rating: 4.7,
-    bio: "Dr. Tariq treats asthma, COPD and sleep-related breathing disorders using Khalida Medicare's in-house sleep lab.",
-    photoSeed: "hamza-tariq",
-  },
-  {
-    id: "dr-mahnoor-iqbal",
-    name: "Dr. Mahnoor Iqbal",
-    departmentId: "ent",
-    specialization: "ENT Surgeon",
-    qualifications: "MBBS, FCPS (ENT)",
-    experienceYears: 7,
-    languages: ["English", "Urdu"],
-    availability: ["Tue", "Fri", "Sat"],
-    rating: 4.8,
-    bio: "Dr. Iqbal treats hearing and sinus conditions, and performs both pediatric and adult ENT surgeries.",
-    photoSeed: "mahnoor-iqbal",
-  },
-]
+export const doctors: Doctor[] = []

@@ -13,4 +13,12 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    fs: {
+      allow: [
+        __dirname,
+        path.resolve(__dirname, '../careplus-backend/src/common/validation'),
+      ],
+    },
+  },
 })

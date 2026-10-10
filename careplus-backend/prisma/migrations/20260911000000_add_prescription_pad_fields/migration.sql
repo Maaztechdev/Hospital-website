@@ -1,0 +1,18 @@
+ALTER TABLE "prescriptions"
+  ADD COLUMN "visit_number" TEXT,
+  ADD COLUMN "visit_date" TIMESTAMP(3),
+  ADD COLUMN "visit_time" TEXT,
+  ADD COLUMN "relationship" TEXT,
+  ADD COLUMN "patient_address" TEXT,
+  ADD COLUMN "patient_contact" TEXT,
+  ADD COLUMN "patient_age" INTEGER,
+  ADD COLUMN "patient_gender" "Gender",
+  ADD COLUMN "patient_weight" TEXT,
+  ADD COLUMN "vitals_json" JSONB,
+  ADD COLUMN "allergies" TEXT,
+  ADD COLUMN "presenting_complaints" TEXT,
+  ADD COLUMN "history" TEXT,
+  ADD COLUMN "findings" TEXT,
+  ADD COLUMN "investigations" TEXT,
+  ADD COLUMN "rx_text" TEXT,
+  ADD COLUMN "configuration_snapshot" JSONB;

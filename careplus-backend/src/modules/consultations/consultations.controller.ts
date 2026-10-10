@@ -25,6 +25,11 @@ export const consultationsController = {
     const c = await consultationsService.create(req.user, req.body, req);
     sendSuccess(res, 201, { data: c, message: "Consultation created" });
   }),
+  start: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const c = await consultationsService.start(req.user, req.body, req);
+    sendSuccess(res, 201, { data: c, message: "Consultation started" });
+  }),
 
   update: asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
@@ -36,5 +41,16 @@ export const consultationsController = {
     if (!req.user) throw new UnauthorizedError();
     const c = await consultationsService.sign(req.user, req.params.id, req);
     sendSuccess(res, 200, { data: c, message: "Consultation signed" });
+  }),
+
+  complete: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const c = await consultationsService.complete(req.user, req.params.id, req);
+    sendSuccess(res, 200, { data: c, message: "Consultation completed" });
+  }),
+  addAddendum: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const addendum = await consultationsService.addAddendum(req.user, req.params.id, req.body.note, req);
+    sendSuccess(res, 201, { data: addendum, message: "Addendum recorded" });
   }),
 };

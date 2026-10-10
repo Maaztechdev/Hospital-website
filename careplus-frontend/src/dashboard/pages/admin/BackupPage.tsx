@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { api, type ApiBackup, type ApiError } from "@/lib/api"
+import { formatDateTime } from "@/dashboard/lib/format"
 import { useToast } from "@/hooks/use-toast"
 
 function formatBytes(bytes: number) {
@@ -32,7 +33,7 @@ export default function BackupPage() {
   async function create() {
     setBusy(true)
     try { await api.createBackup(); toast({ title: "Backup created", variant: "success" }); await load() }
-    catch (error) { toast({ title: "Backup failed", description: (error as ApiError).message, variant: "error" }) }
+    catch (error) { toast({ title: "Backup failed", description: (error as ApiError).message, variant: "error" }); await load() }
     finally { setBusy(false) }
   }
 
@@ -70,8 +71,8 @@ export default function BackupPage() {
         <div className="flex items-center justify-between border-b border-[var(--cp-border)] px-4 py-3"><h2 className="font-semibold text-[var(--cp-ink)]">Available backups</h2><Button variant="ghost" size="icon" onClick={() => void load()} aria-label="Refresh backups"><RefreshCw className="h-4 w-4" /></Button></div>
         {loading ? <p className="p-6 text-sm text-[var(--cp-ink-soft)]">Loading backups...</p> : backups.length === 0 ? <p className="p-6 text-sm text-[var(--cp-ink-soft)]">No backups have been created.</p> : <div className="divide-y divide-[var(--cp-border)]">
           {backups.map((backup) => <div key={backup.id} className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div><p className="break-all text-sm font-medium text-[var(--cp-ink)]">{backup.filename}</p><p className="mt-1 text-xs text-[var(--cp-ink-soft)]">{formatBytes(backup.sizeBytes)} · {new Date(backup.createdAt).toLocaleString()}</p></div>
-            <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void download(backup)}><Download className="h-3.5 w-3.5" /> Download</Button><Button variant="outline" size="sm" onClick={() => setRestoreTarget(backup)}><RotateCcw className="h-3.5 w-3.5" /> Restore</Button><Button variant="ghost" size="icon" onClick={() => void remove(backup)} aria-label={`Delete ${backup.filename}`}><Trash2 className="h-4 w-4 text-[var(--cp-critical)]" /></Button></div>
+            <div><div className="flex flex-wrap items-center gap-2"><p className="break-all text-sm font-medium text-[var(--cp-ink)]">{backup.filename}</p><span className={backup.status === "SUCCESS" ? "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700" : "rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700"}>{backup.status === "SUCCESS" ? "Success" : "Failed"}</span></div><p className="mt-1 text-xs text-[var(--cp-ink-soft)]">{formatBytes(backup.sizeBytes)} · {formatDateTime(backup.createdAt)}</p></div>
+            <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void download(backup)} disabled={backup.status !== "SUCCESS"}><Download className="h-3.5 w-3.5" /> Download</Button><Button variant="outline" size="sm" onClick={() => setRestoreTarget(backup)} disabled={backup.status !== "SUCCESS"}><RotateCcw className="h-3.5 w-3.5" /> Restore</Button><Button variant="ghost" size="icon" onClick={() => void remove(backup)} aria-label={`Delete ${backup.filename}`}><Trash2 className="h-4 w-4 text-[var(--cp-critical)]" /></Button></div>
           </div>)}
         </div>}
       </div>

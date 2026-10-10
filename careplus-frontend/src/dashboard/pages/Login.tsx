@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { Cross, Mail, Lock, LogIn } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -14,6 +14,8 @@ const ROLE_MAP = {
   RECEPTIONIST: "receptionist",
   DOCTOR: "doctor",
   LAB_TECHNICIAN: "lab_technician",
+  PATHOLOGIST: "pathologist",
+  ULTRASOUND_TECH: "ultrasound_tech",
   ULTRASOUND_TECHNICIAN: "ultrasound_technician",
   RADIOLOGIST: "radiologist",
   PHARMACIST: "pharmacist",
@@ -23,6 +25,12 @@ const ROLE_MAP = {
 export default function Login() {
   const { dispatch } = useDashboard()
   const navigate = useNavigate()
+  const location = useLocation()
+  const loginState = location.state as { sessionExpired?: boolean; returnTo?: string } | null
+  const returnTo = loginState?.returnTo?.startsWith("/dashboard/")
+    && loginState.returnTo !== "/dashboard/login"
+    ? loginState.returnTo
+    : null
   const [email, setEmail] = React.useState("admin@careplus.local")
   const [password, setPassword] = React.useState("")
   const [errors, setErrors] = React.useState<{ email?: string; password?: string; form?: string }>({})
@@ -42,7 +50,7 @@ export default function Login() {
       setSession(result)
       const role = ROLE_MAP[result.user.role] as Role
       dispatch({ type: "LOGIN", user: { id: result.user.id, name: result.user.name, email: result.user.email, role } })
-      navigate(ROLE_ROUTES[role])
+      navigate(returnTo ?? ROLE_ROUTES[role], { replace: true })
     } catch (error) {
       setErrors({ form: (error as ApiError).message || "Sign in failed" })
     } finally {
@@ -62,6 +70,7 @@ export default function Login() {
         </div>
 
         <form onSubmit={submit} className="rounded-2xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-6 cp-shadow">
+          {loginState?.sessionExpired && <p role="alert" className="mb-4 rounded-lg bg-[var(--cp-warning-light)] px-3 py-2 text-sm font-medium text-[var(--cp-warning)]">Session expired, please sign in again</p>}
           <div className="mb-4">
             <Label htmlFor="email">Email</Label>
             <div className="relative">

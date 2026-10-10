@@ -5,8 +5,9 @@ import type {
   Bed, BedStatus, Admission, TransferRecord, Surgery, OTStatus, AuditLogEntry, AuditActionType,
 } from "@/dashboard/types"
 import { generateId } from "@/dashboard/lib/format"
-import { api, getAccessToken, getSessionVersion, subscribeToSession, toAppointment, toBed, toDoctor, toAdmission, toInvoice, toLabOrder, toPatient, toSurgery } from "@/lib/api"
+import { api, getAccessToken, getSessionVersion, subscribeToSession, toAppointment, toBed, toDoctor, toAdmission, toInvoice, toLabOrder, toPatient, toSurgery, type ApiMedicine, type ApiStockMovement } from "@/lib/api"
 import { DashboardContext } from "./dashboard-context"
+import { can } from "@/dashboard/permissions"
 
 export interface CurrentUser {
   id: string
@@ -47,6 +48,8 @@ type Action =
   | { type: "SET_DOCTORS"; doctors: Doctor[] }
   | { type: "SET_APPOINTMENTS"; appointments: Appointment[] }
   | { type: "SET_LAB_ORDERS"; labOrders: LabOrder[] }
+  | { type: "SET_MEDICINES"; medicines: Medicine[] }
+  | { type: "SET_STOCK_MOVEMENTS"; stockMovements: StockMovement[] }
   | { type: "SET_INVOICES"; invoices: Invoice[] }
   | { type: "SET_BEDS"; beds: Bed[] }
   | { type: "SET_ADMISSIONS"; admissions: Admission[] }
@@ -108,6 +111,39 @@ function medicineStatus(stock: number, reorder: number, expiryDate: string): Med
   return "In Stock"
 }
 
+function toMedicine(medicine: ApiMedicine): Medicine {
+  const currentStock = medicine.batches.reduce((sum, batch) => sum + batch.stockQuantity, 0)
+  const earliestBatch = medicine.batches[0]
+  const reorderLevel = medicine.batches.reduce((sum, batch) => sum + batch.reorderLevel, 0)
+  const expiryDate = earliestBatch?.expiryDate ?? new Date(0).toISOString()
+  return {
+    id: medicine.id,
+    name: medicine.name,
+    genericName: medicine.genericName ?? "",
+    strength: medicine.strength ?? "",
+    batchNumber: earliestBatch?.batchNumber ?? "—",
+    expiryDate,
+    currentStock,
+    reorderLevel,
+    sellingPrice: Number(earliestBatch?.sellingPrice ?? 0),
+    status: medicineStatus(currentStock, reorderLevel, expiryDate),
+  }
+}
+
+function toStockMovement(movement: ApiStockMovement): StockMovement {
+  const type = movement.movementType === "IN" ? "Stock In" : movement.movementType === "OUT" ? "Dispense" : movement.movementType === "RETURN" ? "Return" : "Adjustment"
+  return {
+    id: movement.id,
+    medicineId: movement.batch.medicineId,
+    medicineName: movement.batch.medicine.name,
+    type,
+    quantity: type === "Dispense" ? -movement.quantity : movement.quantity,
+    reason: movement.reason ?? undefined,
+    date: movement.createdAt,
+    staff: movement.createdByUser?.name ?? "Pharmacy",
+  }
+}
+
 function reducer(state: DashboardState, action: Action): DashboardState {
   switch (action.type) {
     case "LOGIN":
@@ -130,6 +166,10 @@ function reducer(state: DashboardState, action: Action): DashboardState {
       return { ...state, appointments: action.appointments }
     case "SET_LAB_ORDERS":
       return { ...state, labOrders: action.labOrders }
+    case "SET_MEDICINES":
+      return { ...state, medicines: action.medicines }
+    case "SET_STOCK_MOVEMENTS":
+      return { ...state, stockMovements: action.stockMovements }
     case "SET_INVOICES":
       return { ...state, invoices: action.invoices }
     case "SET_BEDS":
@@ -147,8 +187,13 @@ function reducer(state: DashboardState, action: Action): DashboardState {
     case "ADD_APPOINTMENT":
       return { ...state, appointments: [action.appointment, ...state.appointments] }
     case "UPDATE_APPOINTMENT_STATUS":
+      const updatedAppointment = state.appointments.find((appointment) => appointment.id === action.id)
+      const patients = action.status === "Done" && updatedAppointment
+        ? state.patients.map((patient) => patient.mrNumber === updatedAppointment.mrNumber ? { ...patient, lastVisit: updatedAppointment.date } : patient)
+        : state.patients
       return {
         ...state,
+        patients,
         appointments: state.appointments.map((a) =>
           a.id === action.id
             ? {
@@ -445,6 +490,8 @@ export interface DashboardContextValue extends DashboardState {
   dataLoading: boolean
   hydratedUserId: string | null
   dataError: string | null
+  clearDataError: () => void
+  refreshAppointments: (sort?: "date" | "recentlyCreated") => Promise<void>
   refreshWardState: () => Promise<void>
 }
 
@@ -454,10 +501,16 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [dataLoading, setDataLoading] = React.useState(Boolean(getAccessToken()))
   const [hydratedUserId, setHydratedUserId] = React.useState<string | null>(null)
   const [dataError, setDataError] = React.useState<string | null>(null)
+  const clearDataError = React.useCallback(() => setDataError(null), [])
   const [authTick, setAuthTick] = React.useState(0)
   const loadedUserId = React.useRef<string | null>(null)
   const loadingToken = React.useRef<string | null>(null)
   const loadVersion = React.useRef(0)
+
+  const refreshAppointments = React.useCallback(async (sort: "date" | "recentlyCreated" = "date") => {
+    const response = await api.listAppointments({ sort })
+    dispatch({ type: "SET_APPOINTMENTS", appointments: response.map(toAppointment) })
+  }, [])
 
   React.useEffect(() => subscribeToSession(() => setAuthTick((tick) => tick + 1)), [])
 
@@ -484,6 +537,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     const currentLoad = ++loadVersion.current
     const currentSession = getSessionVersion()
     setDataLoading(true)
+    setDataError(null)
     setHydratedUserId(null)
     api.me()
       .then(async (user) => {
@@ -491,18 +545,40 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         if (loadedUserId.current === user.id) return
         loadedUserId.current = user.id
         dispatch({ type: "LOGIN", user: { id: user.id, name: user.name, email: user.email, role: user.role.toLowerCase() as Role } })
-        const canViewInvoices = ["ADMIN", "RECEPTIONIST"].includes(user.role)
-        const [patients, doctors, appointments, labOrders, invoices, auditResponse, beds, admissions, surgeries] = await Promise.all([
-          api.listPatients(),
+        const role = user.role.toLowerCase() as Role
+        const canViewInvoices = can(role, "billing", "view")
+        const canViewAppointments = can(role, "appointments", "view")
+        const canViewLab = can(role, "lab", "view")
+        const canViewPharmacy = can(role, "pharmacy", "view")
+        const canViewStockMovements = ["ADMIN", "PHARMACIST"].includes(user.role)
+        const canViewWard = can(role, "ward", "view")
+        const results = await Promise.allSettled([
+          can(role, "patients", "view") ? api.listPatients() : Promise.resolve([]),
           api.listDoctors(),
-          api.listAppointments(),
-          api.listLabOrders(),
+          canViewAppointments ? api.listAppointments() : Promise.resolve([]),
+          canViewLab ? api.listLabOrders() : Promise.resolve([]),
+          canViewPharmacy ? api.listMedicines() : Promise.resolve([]),
+          canViewStockMovements ? api.listStockMovements() : Promise.resolve([]),
           canViewInvoices ? api.listInvoices() : Promise.resolve([]),
           user.role === "ADMIN" ? api.listAuditLogs() : Promise.resolve([]),
-          api.listBedAvailability(),
-          api.listAdmissions(),
+          canViewWard ? api.listBedAvailability() : Promise.resolve([]),
+          canViewWard ? api.listAdmissions() : Promise.resolve([]),
           ["ADMIN", "DOCTOR", "NURSE"].includes(user.role) ? api.listSurgeries() : Promise.resolve([]),
         ])
+        const valueOr = <T,>(result: PromiseSettledResult<T>, fallback: T) => result.status === "fulfilled" ? result.value : fallback
+        const patients = valueOr(results[0], [])
+        const doctors = valueOr(results[1], [])
+        const appointments = valueOr(results[2], [])
+        const labOrders = valueOr(results[3], [])
+        const medicines = valueOr(results[4], [])
+        const stockMovements = valueOr(results[5], [])
+        const invoices = valueOr(results[6], [])
+        const auditResponse = valueOr(results[7], [])
+        const beds = valueOr(results[8], [])
+        const admissions = valueOr(results[9], [])
+        const surgeries = valueOr(results[10], [])
+        const firstFailure = results.find((result) => result.status === "rejected")
+        if (firstFailure?.status === "rejected") setDataError(firstFailure.reason instanceof Error ? firstFailure.reason.message : "Some dashboard data could not be loaded")
         if (currentLoad !== loadVersion.current || getSessionVersion() !== currentSession || getAccessToken() !== accessToken) return
         dispatch({ type: "SET_PATIENTS", patients: patients.map(toPatient) })
         dispatch({ type: "SET_DOCTORS", doctors: doctors.map((doctor) => toDoctor(doctor)) })
@@ -517,6 +593,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
           patientName: dashboardPatients.find((patient) => patient.id === order.patientId)?.name,
           doctorName: dashboardDoctors.find((doctor) => doctor.id === order.doctorId)?.name,
         })) })
+        dispatch({ type: "SET_MEDICINES", medicines: medicines.map(toMedicine) })
+        dispatch({ type: "SET_STOCK_MOVEMENTS", stockMovements: stockMovements.map(toStockMovement) })
         dispatch({ type: "SET_INVOICES", invoices: invoices.map((invoice) => toInvoice(invoice, dashboardPatients.find((patient) => patient.id === invoice.patientId))) })
               dispatch({ type: "SET_AUDIT_LOGS", auditLogs: auditResponse.map((entry) => ({
                 id: entry.id,
@@ -524,8 +602,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
                 action: entry.action,
                 entity: entry.entityType,
                 entityId: entry.entityId,
-                by: entry.user.name,
-                role: entry.user.role,
+                by: entry.user?.name ?? "System",
+                role: entry.user?.role ?? "System",
                 date: entry.createdAt,
                 details: typeof entry.details === "string" ? entry.details : undefined,
               })) })
@@ -545,7 +623,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       })
   }, [state.currentUser?.id, refreshWardState, authTick])
 
-  const value = React.useMemo(() => ({ ...state, dispatch, authReady, dataLoading, hydratedUserId, dataError, refreshWardState }), [state, authReady, dataLoading, hydratedUserId, dataError, refreshWardState])
+  const value = React.useMemo(() => ({ ...state, dispatch, authReady, dataLoading, hydratedUserId, dataError, clearDataError, refreshAppointments, refreshWardState }), [state, authReady, dataLoading, hydratedUserId, dataError, clearDataError, refreshAppointments, refreshWardState])
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>
 }
 

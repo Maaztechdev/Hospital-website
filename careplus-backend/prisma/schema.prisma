@@ -23,6 +23,7 @@ enum Role {
   RECEPTIONIST
   DOCTOR
   LAB_TECHNICIAN
+  PATHOLOGIST
   ULTRASOUND_TECH
   ULTRASOUND_TECHNICIAN
   RADIOLOGIST
@@ -57,7 +58,7 @@ enum AppointmentStatus {
   CONFIRMED
   WAITING
   IN_CONSULTATION
-  COMPLETED
+  DONE
   CANCELLED
   NO_SHOW
   EXPIRED
@@ -104,6 +105,46 @@ enum LabInterpretation {
   CRITICAL
 }
 
+enum LabParameterResultType {
+  NUMERIC
+  TEXT
+  CHOICE
+}
+
+enum LabReferenceGender {
+  MALE
+  FEMALE
+  ANY
+}
+
+enum LabParameterInterpretation {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL_LOW
+  CRITICAL_HIGH
+}
+
+enum LabOrderEventType {
+  ORDERED
+  SAMPLE_COLLECTED
+  PROCESSING
+  RESULT_SAVED
+  VERIFIED
+  AMENDED
+  PRINTED
+  CANCELLED
+  SAMPLE_REJECTED
+  SAMPLE_RECOLLECTED
+}
+
+enum LabSampleRejectionReason {
+  HAEMOLYSED
+  INSUFFICIENT_QUANTITY
+  WRONG_TUBE
+  OTHER
+}
+
 enum StockMovementType {
   IN
   OUT
@@ -111,6 +152,43 @@ enum StockMovementType {
   RETURN
   EXPIRED
   DAMAGED
+}
+
+enum LabInventoryMovementType {
+  IN
+  OUT
+  ADJUSTMENT
+}
+
+enum LabLedgerAccountType {
+  RECEIVABLE
+  PAYABLE
+}
+
+enum LabLedgerPartyType {
+  PATIENT
+  CLINIC
+  REFERENCE_LAB
+}
+
+enum LabLedgerEntryType {
+  INVOICE_CHARGE
+  PAYMENT_RECEIVED
+  SEND_OUT_CHARGE
+  PAYMENT_MADE
+  ADJUSTMENT
+}
+
+enum PharmacyLedgerAccountType {
+  RECEIVABLE
+  PAYABLE
+}
+
+enum PharmacyLedgerEntryType {
+  SALE_ON_CREDIT
+  PAYMENT_RECEIVED
+  PAYMENT_MADE
+  ADJUSTMENT
 }
 
 enum InvoiceStatus {
@@ -136,6 +214,8 @@ enum PaymentMethod {
   CARD
   BANK_TRANSFER
   MOBILE_WALLET
+  ONLINE
+  CREDIT
 }
 
 enum WardType {
@@ -162,8 +242,6 @@ enum AdmissionType {
   EMERGENCY
   PLANNED
   REFERRAL
-  TRANSFER
-  DAY_CARE
 }
 
 enum ShiftType {
@@ -185,12 +263,6 @@ enum OTStatus {
   RECOVERY
   COMPLETED
   CANCELLED
-}
-
-enum SurgeryPriority {
-  ELECTIVE
-  URGENT
-  EMERGENCY
 }
 
 enum NotificationType {
@@ -264,18 +336,28 @@ model User {
   updatedAt         DateTime  @updatedAt @map("updated_at")
   deletedAt         DateTime? @map("deleted_at")
 
-  department                 Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  department                 Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   staffProfile               StaffProfile?
   doctorProfile              Doctor?
-  createdPatients            Patient[]              @relation("PatientCreatedBy")
+  createdPatients            Patient[]            @relation("PatientCreatedBy")
   auditLogs                  AuditLog[]
   notifications              Notification[]
   nurseAssignments           NurseAssignment[]
   authAttempts               AuthAttempt[]
-  ultrasoundTechnicianOrders UltrasoundOrder[]      @relation("UltrasoundTechnician")
-  ultrasoundReportsPerformed UltrasoundReport[]     @relation("UltrasoundReportPerformedBy")
+  ultrasoundTechnicianOrders UltrasoundOrder[]    @relation("UltrasoundTechnician")
+  ultrasoundReportsPerformed UltrasoundReport[]   @relation("UltrasoundReportPerformedBy")
   pharmacySales              PharmacySale[]
-  consultationAddenda        ConsultationAddendum[]
+  verifiedLabOrders          LabOrder[]           @relation("LabOrderVerifier")
+  authoredLabResults         LabResult[]          @relation("LabResultCreator")
+  labOrderEvents             LabOrderEvent[]
+  rejectedLabSamples         LabSampleRejection[] @relation("LabSampleRejector")
+  recollectedLabSamples      LabSampleRejection[] @relation("LabSampleRecollector")
+  labInventoryMovements      LabInventoryMovement[] @relation("LabInventoryMovementCreator")
+  labInventoryConsumptions   LabInventoryConsumption[] @relation("LabInventoryConsumptionCreator")
+  pharmacyLedgerAccounts     PharmacyLedgerAccount[] @relation("PharmacyLedgerAccountCreator")
+  pharmacyLedgerEntries      PharmacyLedgerEntry[] @relation("PharmacyLedgerEntryCreator")
+  labLedgerEntries            LabLedgerEntry[] @relation("LabLedgerEntryCreator")
+  labLedgerAccounts           LabLedgerAccount[] @relation("LabLedgerAccountCreator")
 
   @@index([email])
   @@index([phone])
@@ -289,8 +371,6 @@ model StaffProfile {
   qualification      String?
   specialization     String?
   registrationNumber String?  @map("registration_number")
-  pmdcRegistrationNo String?  @map("pmdc_registration_no")
-  phcRegistrationNo  String?  @map("phc_registration_no")
   signatureUrl       String?  @map("signature_url")
   stampUrl           String?  @map("stamp_url")
   consultationFee    Decimal? @map("consultation_fee") @db.Decimal(12, 2)
@@ -364,6 +444,8 @@ model Patient {
   consultations     Consultation[]
   prescriptions     Prescription[]
   labOrders         LabOrder[]
+  labLedgerAccounts LabLedgerAccount[]
+  pharmacyLedgerAccount PharmacyLedgerAccount?
   ultrasoundOrders  UltrasoundOrder[]  @relation("UltrasoundPatient")
   ultrasoundReports UltrasoundReport[]
   invoices          Invoice[]
@@ -415,8 +497,6 @@ model Doctor {
   admissions               Admission[]            @relation("AttendingDoctor")
   surgeriesAsSurgeon       Surgery[]              @relation("Surgeon")
   surgeriesAsAnesthetist   Surgery[]              @relation("Anesthetist")
-  surgeriesAsAssistant     Surgery[]              @relation("AssistantSurgeon")
-  prescriptionTemplates    PrescriptionTemplate[]
   prescriptionPadConfig    PrescriptionPadConfig?
 
   @@map("doctors")
@@ -479,17 +559,8 @@ model Consultation {
   patientId          String             @map("patient_id")
   doctorId           String             @map("doctor_id")
   chiefComplaint     String?            @map("chief_complaint")
-  bpSystolic         Int?               @map("bp_systolic")
-  bpDiastolic        Int?               @map("bp_diastolic")
-  temperature        Float?
-  temperatureUnit    String?            @map("temperature_unit")
-  pulse              Int?
-  weight             Float?
-  oxygenSaturation   Int?               @map("oxygen_saturation")
-  respiratoryRate    Int?               @map("respiratory_rate")
-  heightCm           Float?             @map("height_cm")
+  vitalsJson         Json?              @map("vitals_json")
   diagnosis          String?
-  diagnosisCode      String?            @map("diagnosis_code")
   findings           String?
   clinicalNotes      String?            @map("clinical_notes")
   prescriptionStatus PrescriptionStatus @default(DRAFT) @map("prescription_status")
@@ -501,31 +572,16 @@ model Consultation {
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
-  appointment      Appointment            @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
-  patient          Patient                @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  doctor           Doctor                 @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  appointment      Appointment       @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  patient          Patient           @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  doctor           Doctor            @relation(fields: [doctorId], references: [id], onDelete: Restrict)
   prescriptions    Prescription[]
   labOrders        LabOrder[]
   ultrasoundOrders UltrasoundOrder[]
-  addenda          ConsultationAddendum[]
 
   @@index([patientId])
   @@index([doctorId])
   @@map("consultations")
-}
-
-model ConsultationAddendum {
-  id             String   @id @default(uuid())
-  consultationId String   @map("consultation_id")
-  authorId       String   @map("author_id")
-  note           String
-  createdAt      DateTime @default(now()) @map("created_at")
-
-  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
-  author       User         @relation(fields: [authorId], references: [id], onDelete: Restrict)
-
-  @@index([consultationId, createdAt])
-  @@map("consultation_addenda")
 }
 
 model Prescription {
@@ -559,11 +615,10 @@ model Prescription {
   deletedAt             DateTime?          @map("deleted_at")
   signIdempotencyKey    String?            @unique @map("sign_idempotency_key")
 
-  consultation Consultation        @relation(fields: [consultationId], references: [id], onDelete: Restrict)
-  patient      Patient             @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  doctor       Doctor              @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  consultation Consultation       @relation(fields: [consultationId], references: [id], onDelete: Restrict)
+  patient      Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  doctor       Doctor             @relation(fields: [doctorId], references: [id], onDelete: Restrict)
   items        PrescriptionItem[]
-  shares       PrescriptionShare[]
 
   @@index([patientId])
   @@index([doctorId, createdAt])
@@ -597,50 +652,15 @@ model PrescriptionPadConfig {
   @@map("prescription_pad_configs")
 }
 
-model PrescriptionTemplate {
-  id        String   @id @default(uuid())
-  doctorId  String   @map("doctor_id")
-  name      String
-  items     Json
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
-
-  @@unique([doctorId, name])
-  @@index([doctorId, updatedAt])
-  @@map("prescription_templates")
-}
-
-model PrescriptionShare {
-  id             String   @id @default(uuid())
-  prescriptionId String   @map("prescription_id")
-  tokenHash      String   @unique @map("token_hash")
-  filePath       String?  @map("file_path")
-  expiresAt      DateTime @map("expires_at")
-  createdBy      String   @map("created_by")
-  createdAt      DateTime @default(now()) @map("created_at")
-
-  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
-
-  @@index([prescriptionId, expiresAt])
-  @@map("prescription_shares")
-}
-
 model PrescriptionItem {
   id                String  @id @default(uuid())
   prescriptionId    String  @map("prescription_id")
   medicineId        String? @map("medicine_id")
   medicineName      String  @map("medicine_name")
   dosage            String
-  doseAmount        Float?  @map("dose_amount")
-  doseUnit          String? @map("dose_unit")
   route             String
   frequency         String
-  frequencyCode     String? @map("frequency_code")
   durationDays      Int     @map("duration_days")
-  durationValue     Int?    @map("duration_value")
-  durationUnit      String? @map("duration_unit")
   instructions      String?
   quantityDispensed Int     @default(0) @map("quantity_dispensed")
 
@@ -666,16 +686,96 @@ model LabTest {
   referenceRangeMax   Decimal? @map("reference_range_max") @db.Decimal(10, 2)
   turnaroundTimeHours Int?     @map("turnaround_time_hours")
   isActive            Boolean  @default(true) @map("is_active")
+  isSendOut           Boolean  @default(false) @map("is_send_out")
+  referenceLabSupplierId String? @map("reference_lab_supplier_id")
+  sendOutCost         Decimal? @map("send_out_cost") @db.Decimal(10, 2)
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
-  labOrders LabOrder[]
+  labOrders  LabOrder[]
+  packages   LabPackageTest[]
+  parameters LabTestParameter[]
+  inventoryMappings LabTestInventoryMapping[]
+  referenceLabSupplier Supplier? @relation("LabTestReferenceLab", fields: [referenceLabSupplierId], references: [id], onDelete: SetNull)
 
   @@map("lab_tests")
 }
 
+model LabTestParameter {
+  id            String                 @id @default(uuid())
+  testId        String                 @map("test_id")
+  name          String
+  unit          String?
+  displayOrder  Int                    @default(0) @map("display_order")
+  resultType    LabParameterResultType @default(NUMERIC) @map("result_type")
+  decimalPlaces Int                    @default(2) @map("decimal_places")
+  isActive      Boolean                @default(true) @map("is_active")
+  createdAt     DateTime               @default(now()) @map("created_at")
+  updatedAt     DateTime               @updatedAt @map("updated_at")
+
+  test    LabTest              @relation(fields: [testId], references: [id], onDelete: Restrict)
+  ranges  LabReferenceRange[]
+  results LabResultParameter[]
+
+  @@unique([testId, name])
+  @@index([testId, isActive, displayOrder])
+  @@map("lab_test_parameters")
+}
+
+model LabReferenceRange {
+  id           String             @id @default(uuid())
+  parameterId  String             @map("parameter_id")
+  gender       LabReferenceGender @default(ANY)
+  ageMinDays   Int?               @map("age_min_days")
+  ageMaxDays   Int?               @map("age_max_days")
+  low          Decimal?           @db.Decimal(12, 4)
+  high         Decimal?           @db.Decimal(12, 4)
+  criticalLow  Decimal?           @map("critical_low") @db.Decimal(12, 4)
+  criticalHigh Decimal?           @map("critical_high") @db.Decimal(12, 4)
+  notes        String?
+  isActive     Boolean            @default(true) @map("is_active")
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+
+  parameter LabTestParameter @relation(fields: [parameterId], references: [id], onDelete: Restrict)
+
+  @@index([parameterId, gender, isActive])
+  @@map("lab_reference_ranges")
+}
+
+model LabPackage {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  price     Decimal  @db.Decimal(10, 2)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tests    LabPackageTest[]
+  invoices Invoice[]
+
+  @@map("lab_packages")
+}
+
+model LabPackageTest {
+  packageId    String   @map("package_id")
+  testId       String   @map("test_id")
+  displayOrder Int      @default(0) @map("display_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  package LabPackage @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  test    LabTest    @relation(fields: [testId], references: [id], onDelete: Restrict)
+
+  @@id([packageId, testId])
+  @@index([testId])
+  @@map("lab_package_tests")
+}
+
 model LabOrder {
   id                String         @id @default(uuid())
+  orderNumber       String         @unique @map("order_number")
   patientId         String         @map("patient_id")
   doctorId          String?        @map("doctor_id")
   testId            String         @map("test_id")
@@ -687,8 +787,12 @@ model LabOrder {
   sampleCollectedAt DateTime?      @map("sample_collected_at")
   completedAt       DateTime?      @map("completed_at")
   verifiedAt        DateTime?      @map("verified_at")
+  verifiedBy        String?        @map("verified_by")
+  criticalResult    Boolean        @default(false) @map("critical_result")
   createdBy         String         @map("created_by")
   consultationId    String?        @map("consultation_id")
+  invoiceId         String?        @map("invoice_id")
+  referringClinicAccountId String? @map("referring_clinic_account_id")
 
   patient      Patient               @relation(fields: [patientId], references: [id], onDelete: Restrict)
   doctor       Doctor?               @relation(fields: [doctorId], references: [id], onDelete: SetNull)
@@ -696,10 +800,19 @@ model LabOrder {
   results      LabResult[]
   attachments  LabReportAttachment[]
   consultation Consultation?         @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  invoice      Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  verifier     User?                 @relation("LabOrderVerifier", fields: [verifiedBy], references: [id], onDelete: SetNull)
+  events       LabOrderEvent[]
+  rejections   LabSampleRejection[]
+  inventoryConsumption LabInventoryConsumption?
+  referringClinicAccount LabLedgerAccount? @relation("LabOrderReferringClinic", fields: [referringClinicAccountId], references: [id], onDelete: SetNull)
+  ledgerEntries LabLedgerEntry[]
 
   @@index([patientId])
   @@index([status])
   @@index([consultationId])
+  @@index([invoiceId])
+  @@index([referringClinicAccountId])
   @@map("lab_orders")
 }
 
@@ -711,16 +824,174 @@ model LabResult {
   referenceRange  String?            @map("reference_range")
   interpretation  LabInterpretation?
   technicianNotes String?            @map("technician_notes")
+  reportRemarks   String?            @map("report_remarks")
   amendmentReason String?            @map("amendment_reason")
+  amendedAt       DateTime?          @map("amended_at")
   supersededById  String?            @map("superseded_by_id")
   verifiedBy      String?            @map("verified_by")
   verifiedAt      DateTime?          @map("verified_at")
+  createdBy       String?            @map("created_by")
   createdAt       DateTime           @default(now()) @map("created_at")
 
-  labOrder LabOrder @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
+  labOrder   LabOrder             @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
+  creator    User?                @relation("LabResultCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  parameters LabResultParameter[]
+  inventoryConsumption LabInventoryConsumption?
 
   @@index([labOrderId])
   @@map("lab_results")
+}
+
+model LabResultParameter {
+  id                       String                      @id @default(uuid())
+  labResultId              String                      @map("lab_result_id")
+  parameterId              String?                     @map("parameter_id")
+  parameterName            String                      @map("parameter_name")
+  value                    String
+  unit                     String?
+  referenceRange           String?                     @map("reference_range")
+  computedInterpretation   LabParameterInterpretation? @map("computed_interpretation")
+  overriddenInterpretation LabParameterInterpretation? @map("overridden_interpretation")
+  overrideReason           String?                     @map("override_reason")
+  createdAt                DateTime                    @default(now()) @map("created_at")
+
+  result    LabResult         @relation(fields: [labResultId], references: [id], onDelete: Restrict)
+  parameter LabTestParameter? @relation(fields: [parameterId], references: [id], onDelete: SetNull)
+
+  @@index([labResultId])
+  @@index([parameterId])
+  @@map("lab_result_parameters")
+}
+
+model LabOrderEvent {
+  id         String            @id @default(uuid())
+  labOrderId String            @map("lab_order_id")
+  actorId    String?           @map("actor_id")
+  eventType  LabOrderEventType @map("event_type")
+  oldValues  Json?             @map("old_values")
+  newValues  Json?             @map("new_values")
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  labOrder LabOrder @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
+  actor    User?    @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([labOrderId, createdAt])
+  @@map("lab_order_events")
+}
+
+model LabSampleRejection {
+  id            String                   @id @default(uuid())
+  labOrderId    String                   @map("lab_order_id")
+  reason        LabSampleRejectionReason
+  otherReason   String?                  @map("other_reason")
+  rejectedBy    String?                  @map("rejected_by")
+  rejectedAt    DateTime                 @default(now()) @map("rejected_at")
+  recollectedBy String?                  @map("recollected_by")
+  recollectedAt DateTime?                @map("recollected_at")
+
+  labOrder    LabOrder @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
+  rejector    User?    @relation("LabSampleRejector", fields: [rejectedBy], references: [id], onDelete: SetNull)
+  recollector User?    @relation("LabSampleRecollector", fields: [recollectedBy], references: [id], onDelete: SetNull)
+
+  @@index([labOrderId, rejectedAt])
+  @@map("lab_sample_rejections")
+}
+
+model LabInventoryItem {
+  id          String   @id @default(uuid())
+  name        String
+  category    String
+  unit        String
+  reorderLevel Decimal @default(0) @map("reorder_level") @db.Decimal(12, 3)
+  supplierId  String?  @map("supplier_id")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  supplier Supplier?              @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  batches  LabInventoryBatch[]
+  mappings LabTestInventoryMapping[]
+
+  @@index([name])
+  @@index([isActive])
+  @@map("lab_inventory_items")
+}
+
+model LabInventoryBatch {
+  id            String   @id @default(uuid())
+  itemId        String   @map("item_id")
+  batchNumber   String   @map("batch_number")
+  expiryDate    DateTime @map("expiry_date") @db.Date
+  quantity      Decimal  @db.Decimal(12, 3)
+  purchasePrice Decimal  @map("purchase_price") @db.Decimal(12, 2)
+  supplierId    String?  @map("supplier_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  item          LabInventoryItem       @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  supplier      Supplier?              @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  movements     LabInventoryMovement[]
+
+  @@unique([itemId, batchNumber])
+  @@index([itemId, expiryDate])
+  @@map("lab_inventory_batches")
+}
+
+model LabTestInventoryMapping {
+  id                 String  @id @default(uuid())
+  testId             String  @map("test_id")
+  itemId             String  @map("item_id")
+  quantityPerTestRun Decimal @map("quantity_per_test_run") @db.Decimal(12, 3)
+
+  test LabTest          @relation(fields: [testId], references: [id], onDelete: Restrict)
+  item LabInventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  @@unique([testId, itemId])
+  @@index([testId])
+  @@map("lab_test_inventory_mappings")
+}
+
+model LabInventoryConsumption {
+  id             String   @id @default(uuid())
+  labOrderId     String   @unique @map("lab_order_id")
+  resultId       String   @unique @map("result_id")
+  overrideReason String?  @map("override_reason")
+  details        Json
+  createdBy      String   @map("created_by")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  labOrder LabOrder @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
+  result   LabResult @relation(fields: [resultId], references: [id], onDelete: Restrict)
+  creator  User     @relation("LabInventoryConsumptionCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+  @@map("lab_inventory_consumptions")
+}
+
+model LabInventoryMovement {
+  id            String                  @id @default(uuid())
+  batchId       String                  @map("batch_id")
+  movementType  LabInventoryMovementType @map("movement_type")
+  quantity      Decimal                 @db.Decimal(12, 3)
+  referenceType String?                 @map("reference_type")
+  referenceId   String?                 @map("reference_id")
+  reason        String?
+  createdBy     String                  @map("created_by")
+  createdAt     DateTime                @default(now()) @map("created_at")
+
+  batch   LabInventoryBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  creator User              @relation("LabInventoryMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([batchId, createdAt])
+  @@index([createdAt])
+  @@map("lab_inventory_movements")
+}
+
+model LabOrderNumberSequence {
+  year    Int @id
+  counter Int @default(0)
+
+  @@map("lab_order_number_sequences")
 }
 
 model LabReportAttachment {
@@ -869,6 +1140,10 @@ model Supplier {
   createdAt DateTime @default(now()) @map("created_at")
 
   batches MedicineBatch[]
+  labInventoryItems   LabInventoryItem[]
+  labInventoryBatches LabInventoryBatch[]
+  labLedgerAccounts LabLedgerAccount[]
+  referredLabTests LabTest[] @relation("LabTestReferenceLab")
 
   @@map("suppliers")
 }
@@ -928,32 +1203,127 @@ model InvoiceNumberSequence {
 }
 
 model Invoice {
-  id             String        @id @default(uuid())
-  invoiceNumber  String        @unique @map("invoice_number")
-  patientId      String?       @map("patient_id")
-  createdBy      String        @map("created_by")
-  status         InvoiceStatus @default(DRAFT)
-  subtotal       Decimal       @default(0) @db.Decimal(12, 2)
-  discountAmount Decimal       @default(0) @map("discount_amount") @db.Decimal(12, 2)
-  discountType   String?       @map("discount_type")
-  discountReason String?       @map("discount_reason")
-  taxAmount      Decimal       @default(0) @map("tax_amount") @db.Decimal(12, 2)
-  grandTotal     Decimal       @default(0) @map("grand_total") @db.Decimal(12, 2)
-  paidAmount     Decimal       @default(0) @map("paid_amount") @db.Decimal(12, 2)
-  balanceAmount  Decimal       @default(0) @map("balance_amount") @db.Decimal(12, 2)
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
-  voidedAt       DateTime?     @map("voided_at")
-  voidReason     String?       @map("void_reason")
+  id                 String        @id @default(uuid())
+  invoiceNumber      String        @unique @map("invoice_number")
+  patientId          String?       @map("patient_id")
+  createdBy          String        @map("created_by")
+  status             InvoiceStatus @default(DRAFT)
+  subtotal           Decimal       @default(0) @db.Decimal(12, 2)
+  discountAmount     Decimal       @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  discountType       String?       @map("discount_type")
+  discountReason     String?       @map("discount_reason")
+  taxAmount          Decimal       @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  grandTotal         Decimal       @default(0) @map("grand_total") @db.Decimal(12, 2)
+  paidAmount         Decimal       @default(0) @map("paid_amount") @db.Decimal(12, 2)
+  balanceAmount      Decimal       @default(0) @map("balance_amount") @db.Decimal(12, 2)
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+  voidedAt           DateTime?     @map("voided_at")
+  voidReason         String?       @map("void_reason")
+  voidedBy           String?       @map("voided_by")
+  discountAppliedBy  String?       @map("discount_applied_by")
+  discountApprovedBy String?       @map("discount_approved_by")
+  labPackageId       String?       @map("lab_package_id")
 
   patient      Patient?      @relation(fields: [patientId], references: [id], onDelete: Restrict)
   items        InvoiceItem[]
   payments     Payment[]
   pharmacySale PharmacySale?
+  labOrders    LabOrder[]
+  labPackage   LabPackage?   @relation(fields: [labPackageId], references: [id], onDelete: SetNull)
+  labLedgerEntries LabLedgerEntry[]
+  pharmacyLedgerEntries PharmacyLedgerEntry[]
 
   @@index([patientId])
   @@index([status])
+  @@index([labPackageId])
   @@map("invoices")
+}
+
+model LabLedgerAccount {
+  id         String               @id @default(uuid())
+  type       LabLedgerAccountType
+  partyType  LabLedgerPartyType   @map("party_type")
+  patientId  String?              @unique @map("patient_id")
+  supplierId String?              @unique @map("supplier_id")
+  partyName  String               @map("party_name")
+  partyPhone String?              @map("party_phone")
+  createdBy  String               @map("created_by")
+  createdAt  DateTime             @default(now()) @map("created_at")
+  updatedAt  DateTime             @updatedAt @map("updated_at")
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  supplier Supplier? @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  creator User @relation("LabLedgerAccountCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  entries LabLedgerEntry[]
+  referringLabOrders LabOrder[] @relation("LabOrderReferringClinic")
+
+  @@index([type, partyName])
+  @@index([partyType, partyName])
+  @@map("lab_ledger_accounts")
+}
+
+model LabLedgerEntry {
+  id             String             @id @default(uuid())
+  accountId      String             @map("account_id")
+  type           LabLedgerEntryType
+  amount         Decimal            @db.Decimal(12, 2)
+  balanceAfter   Decimal            @map("balance_after") @db.Decimal(12, 2)
+  invoiceId      String?            @map("invoice_id")
+  labOrderId     String?            @unique @map("lab_order_id")
+  paymentMethod  PaymentMethod?     @map("payment_method")
+  notes          String?
+  createdBy      String             @map("created_by")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  account  LabLedgerAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  invoice  Invoice?         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  labOrder LabOrder?        @relation(fields: [labOrderId], references: [id], onDelete: Restrict)
+  creator  User             @relation("LabLedgerEntryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([accountId, createdAt])
+  @@index([createdAt])
+  @@map("lab_ledger_entries")
+}
+
+model PharmacyLedgerAccount {
+  id           String                    @id @default(uuid())
+  type         PharmacyLedgerAccountType @default(RECEIVABLE)
+  patientId    String?                   @unique @map("patient_id")
+  customerName String                    @map("customer_name")
+  customerPhone String?                  @map("customer_phone")
+  createdBy    String                    @map("created_by")
+  createdAt    DateTime                  @default(now()) @map("created_at")
+  updatedAt    DateTime                  @updatedAt @map("updated_at")
+
+  patient  Patient?              @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  creator  User                  @relation("PharmacyLedgerAccountCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  entries  PharmacyLedgerEntry[]
+
+  @@index([type, customerName])
+  @@index([customerPhone])
+  @@map("pharmacy_ledger_accounts")
+}
+
+model PharmacyLedgerEntry {
+  id            String                   @id @default(uuid())
+  accountId     String                   @map("account_id")
+  invoiceId     String?                  @map("invoice_id")
+  type          PharmacyLedgerEntryType
+  amount        Decimal                  @db.Decimal(12, 2)
+  balanceAfter  Decimal                  @map("balance_after") @db.Decimal(12, 2)
+  paymentMethod PaymentMethod?            @map("payment_method")
+  notes         String?
+  createdBy     String                   @map("created_by")
+  createdAt     DateTime                 @default(now()) @map("created_at")
+
+  account PharmacyLedgerAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  invoice Invoice? @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  creator User @relation("PharmacyLedgerEntryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([accountId, createdAt])
+  @@index([invoiceId])
+  @@map("pharmacy_ledger_entries")
 }
 
 model InvoiceItem {
@@ -1090,7 +1460,6 @@ model Admission {
   admissionDate     DateTime        @default(now()) @map("admission_date")
   admissionReason   String          @map("admission_reason")
   depositAmount     Decimal         @default(0) @map("deposit_amount") @db.Decimal(12, 2)
-  dailyRate         Decimal?        @map("daily_rate") @db.Decimal(10, 2)
   status            AdmissionStatus @default(ACTIVE)
   dischargeDate     DateTime?       @map("discharge_date")
   dischargeSummary  String?         @map("discharge_summary")
@@ -1197,37 +1566,31 @@ model OtRoom {
 }
 
 model Surgery {
-  id                 String          @id @default(uuid())
-  patientId          String          @map("patient_id")
-  otRoomId           String          @map("ot_room_id")
-  surgeryType        String          @map("surgery_type")
-  priority           SurgeryPriority @default(ELECTIVE)
-  anesthesiaType     String?         @map("anesthesia_type")
-  notes              String?
-  surgeonId          String          @map("surgeon_id")
-  assistantSurgeonId String?         @map("assistant_surgeon_id")
-  anesthetistId      String?         @map("anesthetist_id")
-  scheduledStart     DateTime        @map("scheduled_start")
-  scheduledEnd       DateTime        @map("scheduled_end")
-  actualStart        DateTime?       @map("actual_start")
-  actualEnd          DateTime?       @map("actual_end")
-  status             OTStatus        @default(SCHEDULED)
-  preOpChecklistJson Json            @default("{\"consent_form_confirmed\":false,\"fasting_confirmed\":false,\"blood_arranged\":false,\"identity_verified\":false,\"allergies_checked\":false,\"pre_op_vitals_recorded\":false,\"required_reports_reviewed\":false}") @map("pre_op_checklist_json")
-  postOpNotes        String?         @map("post_op_notes")
+  id                 String    @id @default(uuid())
+  patientId          String    @map("patient_id")
+  otRoomId           String    @map("ot_room_id")
+  surgeryType        String    @map("surgery_type")
+  surgeonId          String    @map("surgeon_id")
+  anesthetistId      String?   @map("anesthetist_id")
+  scheduledStart     DateTime  @map("scheduled_start")
+  scheduledEnd       DateTime  @map("scheduled_end")
+  actualStart        DateTime? @map("actual_start")
+  actualEnd          DateTime? @map("actual_end")
+  status             OTStatus  @default(SCHEDULED)
+  preOpChecklistJson Json      @default("{\"consent_form_confirmed\":false,\"fasting_confirmed\":false,\"blood_arranged\":false,\"identity_verified\":false,\"allergies_checked\":false,\"pre_op_vitals_recorded\":false,\"required_reports_reviewed\":false}") @map("pre_op_checklist_json")
+  postOpNotes        String?   @map("post_op_notes")
   complications      String?
-  createdBy          String          @map("created_by")
-  createdAt          DateTime        @default(now()) @map("created_at")
-  updatedAt          DateTime        @updatedAt @map("updated_at")
+  createdBy          String    @map("created_by")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
-  patient          Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  otRoom           OtRoom  @relation(fields: [otRoomId], references: [id], onDelete: Restrict)
-  surgeon          Doctor  @relation("Surgeon", fields: [surgeonId], references: [id], onDelete: Restrict)
-  assistantSurgeon Doctor? @relation("AssistantSurgeon", fields: [assistantSurgeonId], references: [id], onDelete: SetNull)
-  anesthetist      Doctor? @relation("Anesthetist", fields: [anesthetistId], references: [id], onDelete: SetNull)
+  patient     Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  otRoom      OtRoom  @relation(fields: [otRoomId], references: [id], onDelete: Restrict)
+  surgeon     Doctor  @relation("Surgeon", fields: [surgeonId], references: [id], onDelete: Restrict)
+  anesthetist Doctor? @relation("Anesthetist", fields: [anesthetistId], references: [id], onDelete: SetNull)
 
   @@index([otRoomId, scheduledStart])
   @@index([surgeonId, scheduledStart])
-  @@index([assistantSurgeonId])
   @@index([status])
   @@map("surgeries")
 }

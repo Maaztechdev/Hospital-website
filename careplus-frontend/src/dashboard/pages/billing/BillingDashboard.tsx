@@ -9,7 +9,7 @@ import { FilterBar, FilterSelect } from "@/dashboard/components/Primitives"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
-import { formatCurrency, formatDate } from "@/dashboard/lib/format"
+import { formatCurrency, formatDate, getHospitalDateKey, getHospitalDateKeyForTimestamp } from "@/dashboard/lib/format"
 import { BarChartWidget } from "@/dashboard/components/charts/Charts"
 import { CreateInvoiceModal } from "@/dashboard/pages/billing/CreateInvoiceModal"
 
@@ -18,15 +18,15 @@ function invoiceTotal(items: { qty: number; unitPrice: number; discount: number 
 }
 
 export default function BillingDashboard() {
-  const { invoices } = useDashboard()
+  const { invoices, dataLoading } = useDashboard()
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const [search, setSearch] = React.useState("")
   const [statusFilter, setStatusFilter] = React.useState("all")
   const [createOpen, setCreateOpen] = React.useState(false)
 
-  const today = new Date().toISOString().slice(0, 10)
-  const todaysInvoices = invoices.filter((i) => i.date.slice(0, 10) === today)
+  const today = getHospitalDateKey()
+  const todaysInvoices = invoices.filter((i) => getHospitalDateKeyForTimestamp(i.date) === today)
   const todaysRevenue = todaysInvoices.reduce((s, i) => s + i.payments.reduce((a, p) => a + p.amount, 0), 0)
   const paidCount = invoices.filter((i) => i.status === "Paid").length
   const partialCount = invoices.filter((i) => i.status === "Partial").length
@@ -37,7 +37,7 @@ export default function BillingDashboard() {
 
   const filtered = invoices.filter((i) => {
     const q = search.trim().toLowerCase()
-    const matchesSearch = !q || i.patientName.toLowerCase().includes(q) || i.mrNumber.toLowerCase().includes(q) || i.id.toLowerCase().includes(q)
+    const matchesSearch = !q || i.invoiceNumber?.toLowerCase().includes(q) || i.patientName.toLowerCase().includes(q) || i.mrNumber.toLowerCase().includes(q) || i.id.toLowerCase().includes(q)
     const matchesStatus = statusFilter === "all" || i.status === statusFilter
     return matchesSearch && matchesStatus
   })
@@ -48,9 +48,9 @@ export default function BillingDashboard() {
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <StatCard label="Today's Revenue" value={formatCurrency(todaysRevenue)} icon={Wallet} tone="success" />
-        <StatCard label="Paid Invoices" value={paidCount.toString()} icon={Receipt} tone="success" />
-        <StatCard label="Partial" value={partialCount.toString()} icon={AlertCircle} tone="warning" />
-        <StatCard label="Unpaid" value={unpaidCount.toString()} icon={AlertCircle} tone="critical" />
+        <StatCard label="Paid Invoices (All Time)" value={paidCount.toString()} icon={Receipt} tone="success" />
+        <StatCard label="Partial Invoices (All Time)" value={partialCount.toString()} icon={AlertCircle} tone="warning" />
+        <StatCard label="Unpaid Invoices (All Time)" value={unpaidCount.toString()} icon={AlertCircle} tone="critical" />
         <StatCard label="Ward Charges" value={formatCurrency(wardCharges)} icon={BedDouble} tone="primary" />
         <StatCard label="Lab Revenue" value={formatCurrency(labRevenue)} icon={FlaskConical} tone="primary" />
         <StatCard label="Pharmacy Revenue" value={formatCurrency(pharmacyRevenue)} icon={Pill} tone="primary" />
@@ -73,12 +73,14 @@ export default function BillingDashboard() {
       <DataTable
         rows={filtered}
         getRowKey={(i) => i.id}
+        loading={dataLoading}
         emptyIcon={Receipt}
         emptyTitle="No invoices found"
+        emptyDescription="Invoices will appear here when they are created."
         onRowClick={(i) => navigate(`/dashboard/billing/${i.id}`)}
         rowTone={(i) => toneFor(i.status)}
         columns={[
-          { key: "id", header: "Invoice", render: (i) => <span className="cp-tabular text-xs font-medium">{i.id}</span> },
+          { key: "invoiceNumber", header: "Invoice", render: (i) => <span className="cp-tabular text-xs font-medium">{i.invoiceNumber ?? "Invoice"}</span> },
           { key: "patient", header: "Patient", render: (i) => <div><p className="font-medium">{i.patientName}</p><p className="cp-tabular text-xs text-[var(--cp-ink-faint)]">{i.mrNumber}</p></div> },
           { key: "date", header: "Date", render: (i) => formatDate(i.date), hideOnMobile: true },
           { key: "total", header: "Total", render: (i) => <span className="cp-tabular font-semibold">{formatCurrency(invoiceTotal(i.lineItems))}</span> },

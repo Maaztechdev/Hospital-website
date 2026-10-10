@@ -29,14 +29,6 @@ export const DOCTORS: Doctor[] = [
 ]
 
 export const PATIENTS: Patient[] = [
-  { mrNumber: "MR-2026-000101", name: "Fatima Zahra", dob: "1990-03-14", age: 36, gender: "Female", phone: "0301-2345678", email: "fatima.zahra@example.com", address: "House 12, Model Town, Gujranwala", cnic: "34101-1234567-1", bloodGroup: "O+", allergies: ["Penicillin"], emergencyContact: "0301-9998887", registeredAt: iso(-40), lastVisit: iso(-2), balance: 4500, status: "Active" },
-  { mrNumber: "MR-2026-000102", name: "Ahmed Raza", dob: "1985-07-02", age: 41, gender: "Male", phone: "0322-4455667", email: "ahmed.raza@example.com", address: "Street 5, Satellite Town, Gujranwala", cnic: "34101-2233445-3", bloodGroup: "B+", allergies: [], emergencyContact: "0322-1122334", registeredAt: iso(-120), lastVisit: iso(-1), balance: 0, status: "Active" },
-  { mrNumber: "MR-2026-000103", name: "Zainab Bibi", dob: "1962-11-20", age: 63, gender: "Female", phone: "0333-7788990", address: "Civil Lines, Gujranwala", cnic: "34101-5544332-9", bloodGroup: "A-", allergies: ["Sulfa Drugs", "Latex"], emergencyContact: "0333-1231231", registeredAt: iso(-300), lastVisit: iso(-5), balance: 12000, status: "Active" },
-  { mrNumber: "MR-2026-000104", name: "Hassan Ali", dob: "2015-01-09", age: 11, gender: "Male", phone: "0345-1122334", address: "Peoples Colony, Gujranwala", bloodGroup: "AB+", allergies: [], emergencyContact: "0345-9988776", registeredAt: iso(-15), lastVisit: iso(0), balance: 1500, status: "Active" },
-  { mrNumber: "MR-2026-000105", name: "Mariam Yousaf", dob: "1998-05-30", age: 28, gender: "Female", phone: "0312-6677889", email: "mariam.y@example.com", address: "Wapda Town, Gujranwala", cnic: "34101-6677889-2", bloodGroup: "O-", allergies: [], emergencyContact: "0312-1112223", registeredAt: iso(-8), lastVisit: iso(0), balance: 0, status: "Active" },
-  { mrNumber: "MR-2026-000106", name: "Usman Tariq", dob: "1978-09-17", age: 47, gender: "Male", phone: "0300-5566778", address: "Gulshan-e-Iqbal, Gujranwala", cnic: "34101-9988776-5", bloodGroup: "B-", allergies: ["Aspirin"], emergencyContact: "0300-3334445", registeredAt: iso(-200), lastVisit: iso(-3), balance: 8200, status: "Active" },
-  { mrNumber: "MR-2026-000107", name: "Ayesha Siddiqui", dob: "2001-12-25", age: 24, gender: "Female", phone: "0321-8899001", address: "Model Town, Gujranwala", bloodGroup: "A+", allergies: [], emergencyContact: "0321-4445556", registeredAt: iso(-2), balance: 0, status: "Active" },
-  { mrNumber: "MR-2026-000108", name: "Imran Khalid", dob: "1955-02-11", age: 71, gender: "Male", phone: "0334-2233445", address: "Rahwali, Gujranwala", cnic: "34101-1122334-7", bloodGroup: "AB-", allergies: ["Iodine Contrast"], emergencyContact: "0334-7778889", registeredAt: iso(-500), lastVisit: iso(-10), balance: 0, status: "Inactive" },
 ]
 
 let apptId = 0
@@ -46,16 +38,16 @@ const mkAppt = (partial: Omit<Appointment, "id" | "token" | "createdAt">): Appoi
 }
 
 export const APPOINTMENTS: Appointment[] = [
-  mkAppt({ mrNumber: "MR-2026-000101", patientName: "Fatima Zahra", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(0), time: "09:00", type: "Follow-up", status: "Waiting", priority: "Routine", waitingSince: iso(0, 8, 40) }),
-  mkAppt({ mrNumber: "MR-2026-000104", patientName: "Hassan Ali", doctorId: "doc-3", doctorName: "Dr. Sana Riaz", department: "Pediatrics", date: isoDate(0), time: "09:15", type: "New Visit", status: "In Consultation", priority: "Urgent" }),
-  mkAppt({ mrNumber: "MR-2026-000105", patientName: "Mariam Yousaf", doctorId: "doc-5", doctorName: "Dr. Hina Sheikh", department: "Gynecology", date: isoDate(0), time: "11:00", type: "New Visit", status: "Confirmed", priority: "Routine" }),
-  mkAppt({ mrNumber: "MR-2026-000102", patientName: "Ahmed Raza", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(0), time: "08:30", type: "Follow-up", status: "Done", priority: "Routine" }),
-  mkAppt({ mrNumber: "MR-2026-000106", patientName: "Usman Tariq", doctorId: "doc-2", doctorName: "Dr. Bilal Hassan", department: "Orthopedics", date: isoDate(0), time: "10:20", type: "Consultation", priority: "Urgent", status: "Waiting", waitingSince: iso(0, 9, 5) }),
-  mkAppt({ mrNumber: "MR-2026-000103", patientName: "Zainab Bibi", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(0), time: "09:20", type: "Follow-up", priority: "Emergency", status: "Waiting", waitingSince: iso(0, 8, 20) }),
-  mkAppt({ mrNumber: "MR-2026-000107", patientName: "Ayesha Siddiqui", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(1), time: "09:10", type: "New Visit", status: "Pending Approval", priority: "Routine", reason: "Fever and body ache for 3 days" }),
-  mkAppt({ mrNumber: "MR-2026-000108", patientName: "Imran Khalid", doctorId: "doc-2", doctorName: "Dr. Bilal Hassan", department: "Orthopedics", date: isoDate(1), time: "11:20", type: "Follow-up", status: "Pending Approval", priority: "Routine", reason: "Knee pain follow-up" }),
-  mkAppt({ mrNumber: "MR-2026-000102", patientName: "Ahmed Raza", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(-1), time: "09:50", type: "Follow-up", status: "No-show", priority: "Routine" }),
-  mkAppt({ mrNumber: "MR-2026-000101", patientName: "Fatima Zahra", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(-2), time: "09:00", type: "New Visit", status: "Cancelled", priority: "Routine", rejectionReason: "Patient requested reschedule" }),
+  mkAppt({ mrNumber: "MR-2026-000101", patientName: "Fatima Zahra", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(0), time: "09:00", type: "Follow-up", status: "WAITING", priority: "Routine", waitingSince: iso(0, 8, 40) }),
+  mkAppt({ mrNumber: "MR-2026-000104", patientName: "Hassan Ali", doctorId: "doc-3", doctorName: "Dr. Sana Riaz", department: "Pediatrics", date: isoDate(0), time: "09:15", type: "New Visit", status: "IN_CONSULTATION", priority: "Urgent" }),
+  mkAppt({ mrNumber: "MR-2026-000105", patientName: "Mariam Yousaf", doctorId: "doc-5", doctorName: "Dr. Hina Sheikh", department: "Gynecology", date: isoDate(0), time: "11:00", type: "New Visit", status: "CONFIRMED", priority: "Routine" }),
+  mkAppt({ mrNumber: "MR-2026-000102", patientName: "Ahmed Raza", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(0), time: "08:30", type: "Follow-up", status: "COMPLETED", priority: "Routine" }),
+  mkAppt({ mrNumber: "MR-2026-000106", patientName: "Usman Tariq", doctorId: "doc-2", doctorName: "Dr. Bilal Hassan", department: "Orthopedics", date: isoDate(0), time: "10:20", type: "Consultation", priority: "Urgent", status: "WAITING", waitingSince: iso(0, 9, 5) }),
+  mkAppt({ mrNumber: "MR-2026-000103", patientName: "Zainab Bibi", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(0), time: "09:20", type: "Follow-up", priority: "Emergency", status: "WAITING", waitingSince: iso(0, 8, 20) }),
+  mkAppt({ mrNumber: "MR-2026-000107", patientName: "Ayesha Siddiqui", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(1), time: "09:10", type: "New Visit", status: "PENDING_APPROVAL", priority: "Routine", reason: "Fever and body ache for 3 days" }),
+  mkAppt({ mrNumber: "MR-2026-000108", patientName: "Imran Khalid", doctorId: "doc-2", doctorName: "Dr. Bilal Hassan", department: "Orthopedics", date: isoDate(1), time: "11:20", type: "Follow-up", status: "PENDING_APPROVAL", priority: "Routine", reason: "Knee pain follow-up" }),
+  mkAppt({ mrNumber: "MR-2026-000102", patientName: "Ahmed Raza", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(-1), time: "09:50", type: "Follow-up", status: "NO_SHOW", priority: "Routine" }),
+  mkAppt({ mrNumber: "MR-2026-000101", patientName: "Fatima Zahra", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(-2), time: "09:00", type: "New Visit", status: "CANCELLED", priority: "Routine", rejectionReason: "Patient requested reschedule" }),
 ]
 
 export const CONSULTATIONS: Consultation[] = []
@@ -63,7 +55,12 @@ export const CONSULTATIONS: Consultation[] = []
 let labId = 0
 const mkLab = (partial: Omit<LabOrder, "id">): LabOrder => {
   labId += 1
-  return { ...partial, id: `LAB-${1000 + labId}` }
+  return {
+    ...partial,
+    orderNumber: partial.orderNumber ?? `LAB-${today.getFullYear()}-${String(labId).padStart(6, "0")}`,
+    sampleCollectedAt: partial.sampleCollectedAt ?? (partial.status === "Ordered" || partial.status === "Cancelled" ? null : partial.orderDate),
+    id: `LAB-${1000 + labId}`,
+  }
 }
 
 export const LAB_ORDERS: LabOrder[] = [

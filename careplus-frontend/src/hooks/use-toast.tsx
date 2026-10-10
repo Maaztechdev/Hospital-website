@@ -19,6 +19,7 @@ const ToastContext = React.createContext<ToastContextValue | undefined>(undefine
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = React.useState<ToastItem[]>([])
+  const recent = React.useRef(new Map<string, number>())
 
   const dismiss = React.useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
@@ -26,9 +27,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const toast = React.useCallback(
     (t: Omit<ToastItem, "id">) => {
+      const key = `${t.title}|${t.description ?? ""}`
+      const now = Date.now()
+      const last = recent.current.get(key) ?? 0
+      if (now - last < 3000) return
+      recent.current.set(key, now)
       const id = Math.random().toString(36).slice(2)
-      setToasts((prev) => [...prev, { ...t, id }])
-      setTimeout(() => dismiss(id), 4500)
+      setToasts([{ ...t, id }])
+      setTimeout(() => dismiss(id), 6000)
     },
     [dismiss]
   )
@@ -36,7 +42,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     const onApiError = (event: Event) => {
       const detail = (event as CustomEvent<{ message?: string }>).detail
-      toast({ title: "Request failed", description: detail?.message || "The hospital server could not complete the request.", variant: "error" })
+      toast({ title: "Unable to complete request", description: detail?.message || "The hospital server could not complete the request.", variant: "error" })
     }
     window.addEventListener("careplus:api-error", onApiError)
     return () => window.removeEventListener("careplus:api-error", onApiError)

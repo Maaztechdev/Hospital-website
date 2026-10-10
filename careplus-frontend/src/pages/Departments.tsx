@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
-import { Search, ArrowRight, Frown, Stethoscope, HeartPulse, Bone, Baby, Brain, Pill, Syringe, Activity } from "lucide-react"
+import { Search, ArrowRight, Frown, Stethoscope, HeartPulse, Bone, Baby, Brain, Pill, Syringe, Activity, Eye, Ear } from "lucide-react"
 import { PageHeader } from "@/components/shared/PageHeader"
 import { Reveal } from "@/components/shared/Reveal"
 import { Card, CardContent } from "@/components/ui/card"
@@ -9,19 +9,21 @@ import { Badge } from "@/components/ui/badge"
 import { EmptyState } from "@/components/shared/EmptyState"
 import { departments } from "@/data/departments"
 import { api } from "@/lib/api"
+import { useToast } from "@/hooks/use-toast"
 
-const iconMap = { HeartPulse, Bone, Baby, Brain, Pill, Syringe, Activity, Stethoscope }
+const iconMap = { HeartPulse, Bone, Baby, Brain, Pill, Syringe, Activity, Stethoscope, Eye, Ear }
 
 export default function Departments() {
   const [query, setQuery] = useState("")
   const [liveDepartments, setLiveDepartments] = useState(departments)
+  const { toast } = useToast()
 
   useEffect(() => {
     api.listPublicDepartments().then((items) => setLiveDepartments(items.map((item) => {
       const fallback = departments.find((department) => department.name.toLowerCase() === item.name.toLowerCase())
       return { id: item.id, name: item.name, icon: iconMap[item.icon as keyof typeof iconMap] || fallback?.icon || Stethoscope, summary: fallback?.summary || "Specialized hospital care from an experienced clinical team.", description: fallback?.description || "Our clinical team provides coordinated care for this department.", services: fallback?.services || [], doctorCount: item._count.doctors, image: fallback?.image || "general-medicine" }
-    }))).catch(() => undefined)
-  }, [])
+    }))).catch((cause) => toast({ title: "Unable to refresh departments", description: cause instanceof Error ? cause.message : "Showing available departments.", variant: "error" }))
+  }, [toast])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -71,7 +73,7 @@ export default function Departments() {
                     <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-primary-light)]">
                       <dept.icon className="h-5 w-5 text-[var(--color-primary)]" />
                     </div>
-                    <Badge variant="neutral">{dept.doctorCount} doctors</Badge>
+                    {dept.doctorCount > 0 && <Badge variant="neutral">{dept.doctorCount} doctors</Badge>}
                   </div>
                   <h3 className="mb-1.5 font-[var(--font-display)] text-lg font-bold text-[var(--color-ink)]">
                     {dept.name}

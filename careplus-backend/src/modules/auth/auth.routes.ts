@@ -97,7 +97,7 @@ router.post("/change-password", authenticate, validate({ body: changePasswordSch
  * /auth/me:
  *   get:
  *     tags: [Auth]
- *     summary: Get the current authenticated user's token claims
+ *     summary: Get the current authenticated user's profile
  *     responses:
  *       200: { description: OK }
  */

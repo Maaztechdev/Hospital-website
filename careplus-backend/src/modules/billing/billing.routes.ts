@@ -12,9 +12,9 @@ import { createInvoiceSchema, idParamSchema, listInvoicesQuerySchema, recordPaym
 export const billingController = {
   list: asyncHandler(async (req: Request, res: Response) => {
     const page = getPageParams(req);
-    const { patientId, status } = req.query as Record<string, string | undefined>;
+    const { patientId, status, search, itemType } = req.query as Record<string, string | undefined>;
     if (!req.user) throw new UnauthorizedError();
-    const { items, total } = await billingService.list(req.user, { ...page, patientId, status });
+    const { items, total } = await billingService.list(req.user, { ...page, patientId, status, search, itemType });
     sendSuccess(res, 200, { data: items, pagination: paginationMeta(page.page, page.limit, total) });
   }),
   getById: asyncHandler(async (req: Request, res: Response) => {
@@ -41,23 +41,23 @@ export const billingController = {
 const router = Router();
 router.use(authenticate);
 
-router.get("/invoices", requireRole(["ADMIN", "RECEPTIONIST"]), validate({ query: listInvoicesQuerySchema }), billingController.list);
-router.get("/invoices/:id", requireRole(["ADMIN", "RECEPTIONIST"]), validate({ params: idParamSchema }), billingController.getById);
+router.get("/invoices", requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST"]), validate({ query: listInvoicesQuerySchema }), billingController.list);
+router.get("/invoices/:id", requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST"]), validate({ params: idParamSchema }), billingController.getById);
 router.post(
   "/invoices",
-  requireRole(["ADMIN", "RECEPTIONIST"]),
+  requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST"]),
   validate({ body: createInvoiceSchema }),
   billingController.create
 );
 router.post(
   "/invoices/:id/payments",
-  requireRole(["ADMIN", "RECEPTIONIST"]),
+  requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST"]),
   validate({ params: idParamSchema, body: recordPaymentSchema }),
   billingController.recordPayment
 );
 router.post(
   "/invoices/:id/void",
-  requireRole(["ADMIN"]),
+  requireRole(["ADMIN", "BILLING_MANAGER"]),
   validate({ params: idParamSchema, body: voidInvoiceSchema }),
   billingController.voidInvoice
 );

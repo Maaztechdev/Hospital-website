@@ -15,7 +15,7 @@ router.use(authenticate);
  *     responses:
  *       200: { description: OK }
  */
-router.get("/", appointmentsController.opdQueue);
+router.get("/", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), appointmentsController.opdQueue);
 
 /**
  * @openapi

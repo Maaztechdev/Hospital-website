@@ -1,0 +1,1 @@
+ALTER TABLE "prescriptions" RENAME COLUMN "patient_gender" TO "patientGender";

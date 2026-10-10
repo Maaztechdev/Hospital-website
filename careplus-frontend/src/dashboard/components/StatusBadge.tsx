@@ -12,6 +12,7 @@ const STATUS_TONE: Record<string, SemanticTone> = {
   "In Consultation": "accent",
   "Done": "success",
   "Cancelled": "neutral",
+  "Expired": "warning",
   "No-show": "critical",
   // Lab
   "Ordered": "info",

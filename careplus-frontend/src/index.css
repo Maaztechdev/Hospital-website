@@ -47,13 +47,17 @@
 @layer base {
   html {
     scroll-behavior: smooth;
+    overflow-x: hidden;
+    margin: 0;
   }
   body {
+    margin: 0;
     background-color: var(--color-bg);
     color: var(--color-ink);
     font-family: var(--font-body);
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
   }
   h1, h2, h3, h4 {
     font-family: var(--font-display);
@@ -68,6 +72,84 @@
 }
 
 @layer utilities {
+
+  .scroll-progress {
+    position: fixed;
+    inset: 0 auto auto 0;
+    z-index: 100;
+    height: 3px;
+    background: var(--color-accent);
+    pointer-events: none;
+    transition: width 80ms linear;
+  }
+
+  .nav-link-underline::after {
+    content: "";
+    position: absolute;
+    right: 0.5rem;
+    bottom: 0;
+    left: 0.5rem;
+    height: 2px;
+    background: var(--color-primary);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 220ms ease;
+  }
+
+  .nav-link-underline:hover::after,
+  .nav-link-underline[aria-current="page"]::after {
+    transform: scaleX(1);
+  }
+
+  .doctor-flip {
+    perspective: 1000px;
+  }
+
+  .doctor-flip-inner {
+    min-height: 280px;
+    transform-style: preserve-3d;
+    transition: transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .doctor-flip:hover .doctor-flip-inner,
+  .doctor-flip.is-flipped .doctor-flip-inner {
+    transform: rotateY(180deg);
+  }
+
+  .doctor-flip.is-reduced .doctor-flip-inner {
+    transform: rotateY(180deg);
+    transition: none;
+  }
+
+  .doctor-flip-face {
+    backface-visibility: hidden;
+  }
+
+  .doctor-flip-back {
+    position: absolute;
+    inset: 0;
+    transform: rotateY(180deg);
+  }
+
+  .cta-gradient {
+    background: linear-gradient(120deg, var(--color-primary-dark), var(--color-primary), var(--color-accent-dark), var(--color-primary-dark));
+    background-size: 300% 300%;
+    animation: cta-gradient-shift 10s ease-in-out infinite;
+  }
+
+  .heartbeat-icon {
+    animation: heartbeat-scale 1.8s ease-in-out infinite;
+  }
+
+  .testimonial-track {
+    --testimonial-index: 0;
+    transform: translateX(calc(var(--testimonial-index) * -33.333333%));
+    transition: transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @media (min-width: 768px) {
+    .testimonial-track { transform: translateX(0); }
+  }
   .shadow-care {
     box-shadow:
       0 1px 2px rgba(23, 105, 170, 0.06),
@@ -107,6 +189,17 @@
   100% { transform: translateY(0); }
 }
 
+@keyframes cta-gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@keyframes heartbeat-scale {
+  0%, 100% { transform: scale(1); }
+  10%, 25% { transform: scale(1.12); }
+  18% { transform: scale(0.96); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
@@ -114,12 +207,35 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  .cta-gradient, .heartbeat-icon { animation: none !important; }
+  .doctor-flip-inner, .testimonial-track { transition: none !important; }
 }
 
 @media print {
   .no-print { display: none !important; }
+  body * { visibility: hidden !important; }
+  #pharmacy-print-root, #pharmacy-print-root * { visibility: visible !important; }
+  #pharmacy-print-root { display: block !important; position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; }
+  #lab-report-print, #lab-report-print * { visibility: visible !important; }
+  #lab-report-print { display: block !important; position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; margin: 0 !important; border: 0 !important; }
+  #confirmation-print, #confirmation-print * { visibility: visible !important; }
+  #confirmation-print { display: block !important; position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; margin: 0 !important; border: 1px solid #c8cfcc !important; border-radius: 0 !important; }
+  #confirmation-print > .bg-\[var\(--color-accent\)\] { background: white !important; border-bottom: 2px solid #111 !important; color: black !important; }
+  #confirmation-print > .bg-\[var\(--color-accent\)\] svg { color: #111 !important; }
+  #confirmation-print > .bg-\[var\(--color-accent\)\] p { color: #333 !important; }
+  #confirmation-print > div:not(.confirmation-print-header) { break-inside: avoid; }
+  .confirmation-print-header { display: flex !important; align-items: center; gap: 10px; padding: 0 0 12px; border-bottom: 2px solid #111; color: #111; }
+  .confirmation-print-logo { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; color: #111; }
+  .confirmation-print-logo img { width: 36px; height: 36px; object-fit: contain; }
+  .confirmation-print-logo svg { width: 30px; height: 30px; }
+  .confirmation-print-header strong, .confirmation-print-header span { display: block; }
+  .confirmation-print-header strong { font-size: 16px; }
+  .confirmation-print-header span { margin-top: 2px; font-size: 11px; color: #555; }
+  #confirmation-print .text-\[var\(--color-ink-soft\)\] { color: #444 !important; }
+  #confirmation-print .text-\[var\(--color-primary\)\] { color: #111 !important; }
   body { background: white !important; }
   * { animation: none !important; box-shadow: none !important; color: black !important; }
+  @page { margin: 12mm; }
 }
 
 /* =========================================================
@@ -200,4 +316,209 @@
 
 @media print {
   .cp-print-hide { display: none !important; }
+}
+
+.pharmacy-print-document { display: none; font-family: Georgia, "Times New Roman", serif; color: #111; background: #fff; }
+.pharmacy-print-header { display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #111; padding-bottom: 10px; }
+.pharmacy-print-header h1 { margin: 0; font-size: 18px; }
+.pharmacy-print-header p { margin: 2px 0 0; font-size: 10px; }
+.pharmacy-print-header strong { margin-left: auto; font-size: 14px; text-transform: uppercase; }
+.pharmacy-print-logo { width: 42px; height: 42px; object-fit: contain; }
+.pharmacy-print-meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }
+.pharmacy-print-field span { display: block; font-size: 9px; text-transform: uppercase; color: #555; }
+.pharmacy-print-field strong { display: block; margin-top: 2px; font-size: 11px; overflow-wrap: anywhere; }
+.pharmacy-print-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.pharmacy-print-table th, .pharmacy-print-table td { border-bottom: 1px solid #bbb; padding: 7px 4px; text-align: left; vertical-align: top; }
+.pharmacy-print-table th { font-size: 9px; text-transform: uppercase; }
+.pharmacy-print-table .number { text-align: right; white-space: nowrap; }
+.pharmacy-print-table small { display: block; color: #555; font-size: 9px; }
+.pharmacy-print-signature { display: flex; justify-content: flex-end; gap: 32px; margin-top: 20px; }
+.pharmacy-print-footer { margin-top: 28px; border-top: 1px solid #bbb; padding-top: 8px; text-align: center; font-size: 10px; }
+
+@media print {
+  .pharmacy-print-document { display: block !important; }
+  .pharmacy-print-receipt { width: 72mm !important; margin: 0 auto; }
+  .pharmacy-print-receipt .pharmacy-print-header { display: block; text-align: center; }
+  .pharmacy-print-receipt .pharmacy-print-header strong { display: block; margin: 8px 0 0; }
+  .pharmacy-print-receipt .pharmacy-print-meta { grid-template-columns: 1fr 1fr; gap: 7px; margin: 12px 0; }
+  .pharmacy-print-receipt .pharmacy-print-table { font-size: 10px; }
+  .pharmacy-print-receipt .pharmacy-print-table th, .pharmacy-print-receipt .pharmacy-print-table td { padding: 5px 2px; }
+  .pharmacy-print-receipt .pharmacy-print-signature { display: block; }
+  .pharmacy-print-receipt .pharmacy-print-signature .pharmacy-print-field + .pharmacy-print-field { margin-top: 8px; }
+}
+
+.invoice-print-root { display: none; }
+
+@media print {
+  @page { size: A4; margin: 12mm; }
+
+  html, body { width: 100%; height: auto; margin: 0 !important; background: #fff !important; }
+  #invoice-print-root, #invoice-print-root * { visibility: visible !important; }
+  #invoice-print-root {
+    display: block !important;
+    position: fixed !important;
+    inset: 0 auto auto 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    color: #111 !important;
+    background: #fff !important;
+  }
+  .invoice-print-document {
+    width: 100%;
+    color: #111 !important;
+    background: #fff !important;
+    font: 9pt/1.3 Arial, Helvetica, sans-serif;
+  }
+  .invoice-print-header { display: flex; align-items: center; gap: 10px; border-bottom: 2px solid #111; padding-bottom: 8px; }
+  .invoice-print-logo { width: 48px; height: 48px; object-fit: contain; }
+  .invoice-print-hospital { flex: 1; min-width: 0; }
+  .invoice-print-hospital h1 { margin: 0 0 2px; font-size: 16pt; line-height: 1.15; }
+  .invoice-print-hospital p { margin: 1px 0; font-size: 8pt; color: #333 !important; }
+  .invoice-print-status { display: inline-block; border: 1px solid currentColor; border-radius: 3px; padding: 5px 8px; font-size: 9pt; font-weight: 700; letter-spacing: .04em; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .invoice-print-status-paid { color: #12633a !important; background: #e5f4eb !important; }
+  .invoice-print-status-partial { color: #805500 !important; background: #fff2cc !important; }
+  .invoice-print-status-unpaid, .invoice-print-status-void { color: #9b2424 !important; background: #fde8e8 !important; }
+  .invoice-print-title-row { display: flex; justify-content: space-between; align-items: baseline; margin: 10px 0 7px; }
+  .invoice-print-title-row h2 { margin: 0; font-size: 13pt; }
+  .invoice-print-title-row strong { font-size: 10pt; }
+  .invoice-print-patient { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .invoice-print-patient span { display: block; margin-bottom: 2px; color: #555 !important; font-size: 7pt; text-transform: uppercase; }
+  .invoice-print-patient strong { display: block; overflow-wrap: anywhere; font-size: 8.5pt; }
+  .invoice-print-items { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8pt; }
+  .invoice-print-items th, .invoice-print-items td { border-bottom: 1px solid #bbb; padding: 5px 4px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  .invoice-print-items th { border-top: 1px solid #777; background: #f0f0f0 !important; font-size: 7pt; text-transform: uppercase; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .invoice-print-items th:first-child, .invoice-print-items td:first-child { width: 31%; }
+  .invoice-print-items th:nth-child(2), .invoice-print-items td:nth-child(2) { width: 15%; }
+  .invoice-print-items .number { text-align: right; white-space: nowrap; }
+  .invoice-print-totals { display: flex; flex-direction: column; gap: 3px; width: 48%; margin: 8px 0 0 auto; }
+  .invoice-print-totals div { display: flex; justify-content: space-between; gap: 12px; }
+  .invoice-print-totals .grand { border-top: 1px solid #777; margin-top: 2px; padding-top: 4px; font-size: 10pt; font-weight: 700; }
+  .invoice-print-totals .balance { border-top: 1px solid #bbb; padding-top: 3px; font-weight: 700; }
+  .invoice-print-payments { margin-top: 11px; }
+  .invoice-print-payments h2 { margin: 0 0 5px; font-size: 10pt; }
+  .invoice-print-payment-table { font-size: 7.5pt; }
+  .invoice-print-payment-table th, .invoice-print-payment-table td { padding: 4px; }
+  .invoice-print-footer { margin-top: 12px; border-top: 1px solid #aaa; padding-top: 6px; text-align: center; color: #444 !important; font-size: 8pt; }
+  .invoice-print-document tr, .invoice-print-header, .invoice-print-patient, .invoice-print-totals, .invoice-print-footer { break-inside: avoid; page-break-inside: avoid; }
+}
+
+.lab-report-sheet {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--cp-border);
+  border-radius: 12px;
+  background: #fff;
+  padding: 24px;
+  color: #17212b;
+  font-family: Arial, sans-serif;
+}
+.lab-report-header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid #0e5c56;
+  padding-bottom: 14px;
+}
+.lab-report-logo { width: 52px; height: 52px; object-fit: contain; }
+.lab-report-brand h1 { margin: 0; color: #0e5c56; font-size: 20px; font-weight: 700; }
+.lab-report-brand p { margin: 3px 0 0; color: #52655f; font-size: 11px; }
+.lab-report-brand .lab-report-accreditation { color: #17212b; font-weight: 600; }
+.lab-report-brand .lab-report-custom-header { white-space: pre-wrap; }
+.lab-report-title { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 3px; }
+.lab-report-title h2 { margin: 0; color: #17212b; font-size: 17px; font-weight: 700; }
+.lab-report-preliminary { color: #a51e1e; font-size: 12px; letter-spacing: .04em; }
+.lab-report-amended { color: #925400; font-size: 12px; letter-spacing: .04em; }
+.lab-report-patient { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 18px; margin-top: 18px; border-bottom: 1px solid #d5e2e0; padding-bottom: 16px; }
+.lab-report-patient div { min-width: 0; }
+.lab-report-patient span, .lab-report-signers span { display: block; color: #52655f; font-size: 9px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.lab-report-patient strong { display: block; margin-top: 3px; overflow-wrap: anywhere; font-size: 11px; }
+.lab-report-results { position: relative; z-index: 1; margin-top: 18px; }
+.lab-report-results h3 { margin: 0 0 8px; color: #0e5c56; font-size: 13px; font-weight: 700; }
+.lab-report-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.lab-report-table thead { display: table-header-group; }
+.lab-report-table th, .lab-report-table td { border-bottom: 1px solid #d5e2e0; padding: 7px 6px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.lab-report-table th { background: #e8f2ef; color: #17212b; font-size: 9px; font-weight: 700; }
+.lab-report-table .is-abnormal { color: #9a4f00; font-weight: 700; }
+.lab-report-table .is-critical { color: #a51e1e; }
+.lab-report-flag { width: 34px; text-align: center !important; font-weight: 800; }
+.lab-report-remarks { position: relative; z-index: 1; margin-top: 14px; white-space: pre-wrap; font-size: 10px; }
+.lab-report-footer { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 16px; margin-top: 34px; border-top: 1px solid #aebfbb; padding-top: 12px; break-inside: avoid; }
+.lab-report-signers { display: flex; align-items: end; gap: 28px; }
+.lab-report-signers > div { min-width: 120px; }
+.lab-report-signers strong { display: block; margin-top: 16px; border-top: 1px solid #7f9995; padding-top: 4px; font-size: 10px; }
+.lab-report-signers small { display: block; margin-top: 2px; color: #52655f; font-size: 8px; }
+.lab-report-verification-line { grid-column: 1 / -1; margin: 0; font-size: 9px; }
+.lab-report-pathologist img, .lab-report-technician img { display: block; max-width: 90px; max-height: 35px; object-fit: contain; }
+.lab-report-pathologist img + span { margin-top: 2px; }
+.lab-report-custom-footer { grid-column: 1 / -1; margin: 0; white-space: pre-wrap; color: #52655f; font-size: 9px; }
+.lab-report-qr { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 8px; text-align: center; }
+.lab-report-qr img { width: 58px; height: 58px; image-rendering: pixelated; }
+.lab-report-page-number { grid-column: 1 / -1; color: #52655f; font-size: 9px; text-align: right; }
+.lab-report-watermark { display: none; }
+
+@media (max-width: 640px) {
+  .lab-report-sheet { padding: 16px; }
+  .lab-report-patient { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lab-report-table { font-size: 9px; }
+  .lab-report-table th, .lab-report-table td { padding: 5px 3px; }
+  .lab-report-footer { grid-template-columns: 1fr; }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+    @top-left { content: ""; }
+    @top-center { content: ""; }
+    @top-right { content: ""; }
+    @bottom-left { content: ""; }
+    @bottom-center { content: "Page " counter(page); font: 9px Arial, sans-serif; color: #52655f; }
+    @bottom-right { content: ""; }
+  }
+  html, body { width: auto !important; height: auto !important; margin: 0 !important; background: #fff !important; }
+  body * { visibility: hidden !important; }
+  #lab-report-print, #lab-report-print * { visibility: visible !important; }
+  #pharmacy-print-root, #confirmation-print, #invoice-print-root, .pharmacy-print-document, .invoice-print-document { display: none !important; }
+  #lab-report-print {
+    display: block !important;
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    color: #17212b !important;
+    background: #fff !important;
+    box-shadow: none !important;
+  }
+  .lab-report-header, .lab-report-patient, .lab-report-results, .lab-report-remarks, .lab-report-footer { position: relative !important; z-index: 1; }
+  .lab-report-header { grid-template-columns: auto 1fr; }
+  .lab-report-logo { width: 45px; height: 45px; }
+  .lab-report-brand h1 { color: #0e5c56 !important; font-size: 17px; }
+  .lab-report-patient { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .lab-report-custom-header, .lab-report-custom-footer { white-space: pre-wrap !important; }
+  .lab-report-table tr { break-inside: avoid; }
+  .lab-report-table .is-abnormal { color: #9a4f00 !important; font-weight: 700 !important; }
+  .lab-report-table .is-critical { color: #a51e1e !important; }
+  .lab-report-footer { break-inside: avoid; }
+  .lab-report-page-number { display: none !important; }
+  .lab-report-watermark {
+    display: block !important;
+    position: fixed !important;
+    z-index: 0 !important;
+    top: 45%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-32deg);
+    color: rgba(180, 35, 35, .11) !important;
+    font-size: 48pt;
+    font-weight: 800;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .lab-report-sheet, .lab-report-sheet * { animation: none !important; box-shadow: none !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .lab-report-table th { background: #e8f2ef !important; }
+  body > *:not(#root) { display: none !important; }
 }

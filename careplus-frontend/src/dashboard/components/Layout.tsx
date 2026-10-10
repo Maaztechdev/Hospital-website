@@ -21,12 +21,16 @@ const LABELS: Record<string, string> = {
   pharmacy: "Pharmacy",
   billing: "Billing",
   nurse: "Ward & Vitals",
+  ward: "Ward Board",
+  ot: "Operation Theatre",
+  ultrasound: "Ultrasound",
   login: "Login",
   users: "Users",
 }
 
 export function Breadcrumbs() {
   const location = useLocation()
+  const { labOrders, patients, invoices, appointments } = useDashboard()
   const parts = location.pathname.split("/").filter(Boolean)
   if (parts.length <= 1) return null
 
@@ -36,7 +40,12 @@ export function Breadcrumbs() {
       {parts.map((part, i) => {
         acc += `/${part}`
         const isLast = i === parts.length - 1
-        const label = LABELS[part] ?? decodeURIComponent(part)
+        const parent = parts[i - 1]
+        const labOrder = parent === "lab" ? labOrders.find((order) => order.id === part) : undefined
+        const profilePatient = parent === "patients" ? patients.find((patient) => patient.mrNumber === part) : undefined
+        const invoice = parent === "billing" ? invoices.find((item) => item.id === part) : undefined
+        const consultationAppointment = parent === "consultation" ? appointments.find((item) => item.id === part) : undefined
+        const label = LABELS[part] ?? (parent === "lab" && part === "orders" ? "Lab Orders" : parent === "lab" && part === "reports" ? "Lab Reports" : labOrder ? `${labOrder.testName} — ${labOrder.patientName}` : profilePatient?.name ?? invoice?.invoiceNumber ?? (parent === "billing" ? "Invoice" : consultationAppointment ? `${consultationAppointment.patientName} (${consultationAppointment.mrNumber})` : parent === "consultation" ? "Consultation" : decodeURIComponent(part)))
         return (
           <span key={acc} className="flex items-center gap-1">
             {i > 0 && <ChevronRight className="h-3 w-3 text-[var(--cp-ink-faint)]" />}
@@ -68,17 +77,19 @@ export function DashboardPageHeader({
 }
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
-  const { currentUser, authReady, dataLoading, dataError } = useDashboard()
+  const { currentUser, authReady, dataLoading, dataError, clearDataError } = useDashboard()
+  const location = useLocation()
+  React.useEffect(() => { clearDataError() }, [location.pathname, clearDataError])
   if (!authReady) return null
   if (!currentUser) return <Navigate to="/dashboard/login" replace />
 
   return (
-    <div className="flex min-h-screen bg-[var(--cp-bg)]">
+    <div className="flex h-screen overflow-hidden bg-[var(--cp-bg)]">
       <Sidebar />
-      <div className="flex min-h-screen flex-1 flex-col overflow-x-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <Header />
-        <main className="flex-1 px-4 py-5 sm:px-6 sm:py-6">
-          <div className="mx-auto max-w-7xl">
+        <main className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
+          <div className="mx-auto min-h-full max-w-7xl">
             <Breadcrumbs />
             {dataLoading && <p className="mb-4 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-surface)] px-4 py-3 text-sm text-[var(--cp-ink-soft)]">Loading live hospital data...</p>}
             {dataError && <p role="alert" className="mb-4 rounded-lg border border-[var(--cp-critical)] bg-[var(--cp-critical-light)] px-4 py-3 text-sm text-[var(--cp-critical)]">{dataError}</p>}

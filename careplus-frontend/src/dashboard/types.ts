@@ -1,9 +1,5 @@
 // Shared domain types for the Khalida Medicare Admin & Staff Management System (Phase 2).
 // Frontend-only mock domain model — no backend contracts implied.
-import { APPOINTMENT_STATUSES, APPOINTMENT_STATUS_LABELS, type AppointmentStatus } from "../../../careplus-backend/src/modules/appointments/appointmentStatus"
-
-export { APPOINTMENT_STATUSES, APPOINTMENT_STATUS_LABELS }
-export type { AppointmentStatus }
 
 export type Role =
   | "admin"
@@ -11,6 +7,7 @@ export type Role =
   | "receptionist"
   | "doctor"
   | "lab_technician"
+  | "pathologist"
   | "ultrasound_tech"
   | "ultrasound_technician"
   | "radiologist"
@@ -23,6 +20,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   receptionist: "Receptionist",
   doctor: "Doctor",
   lab_technician: "Lab Technician",
+  pathologist: "Pathologist",
   ultrasound_tech: "Ultrasound Technician",
   ultrasound_technician: "Ultrasound Technician",
   radiologist: "Radiologist",
@@ -46,13 +44,22 @@ export interface Patient {
   bloodGroup: BloodGroup
   allergies: string[]
   emergencyContact: string
-  emergencyContactName?: string
   notes?: string
   registeredAt: string // ISO datetime
   lastVisit?: string
   balance: number
   status: "Active" | "Inactive"
 }
+
+export type AppointmentStatus =
+  | "Pending Approval"
+  | "Confirmed"
+  | "Waiting"
+  | "In Consultation"
+  | "Done"
+  | "Cancelled"
+  | "Expired"
+  | "No-show"
 
 export type Priority = "Routine" | "Urgent" | "Emergency"
 
@@ -61,8 +68,6 @@ export interface Appointment {
   token: number
   mrNumber: string
   patientName: string
-  age?: number
-  gender?: Gender
   doctorId: string
   doctorName: string
   department: string
@@ -72,7 +77,6 @@ export interface Appointment {
   status: AppointmentStatus
   priority: Priority
   reason?: string
-  chiefComplaint?: string
   rejectionReason?: string
   createdAt: string
   waitingSince?: string // ISO datetime, set when status becomes Waiting
@@ -80,7 +84,6 @@ export interface Appointment {
 
 export interface Doctor {
   id: string
-  userId?: string
   name: string
   department: string
   designation: string
@@ -111,34 +114,22 @@ export interface TimelineEvent {
 }
 
 export interface VitalSigns {
-  systolic: string
-  diastolic: string
+  bp: string
   temperature: string
-  temperatureUnit: "F" | "C"
   pulse: string
   weight: string
   spo2: string
   respiratoryRate: string
-  heightCm: string
 }
 
 export interface PrescriptionItem {
   id: string
   medicineId?: string
   medicine: string
-  genericName?: string
-  doseAmount?: string
-  doseUnit?: string
+  dosage: string
   route: string
-  frequencyCode?: string
-  legacyFrequency?: string
-  durationValue?: string
-  durationUnit?: "days" | "weeks" | "months"
-  legacyDosage?: string
-  legacyDuration?: string
-  dosage?: string
-  frequency?: string
-  duration?: string
+  frequency: string
+  duration: string
   instructions?: string
 }
 
@@ -154,7 +145,6 @@ export interface Consultation {
   chiefComplaint: string
   clinicalNotes: string
   diagnosis: string
-  diagnosisCode?: string
   prescriptions: PrescriptionItem[]
   labRecommendations: string[]
   followUpDate?: string
@@ -175,6 +165,9 @@ export interface LabOrder {
   orderDate: string
   priority: Priority
   status: LabOrderStatus
+  orderNumber?: string
+  sampleCollectedAt?: string
+  criticalResult?: boolean
   resultValue?: string
   resultUnit?: string
   referenceRange?: string
@@ -183,6 +176,7 @@ export interface LabOrder {
   reportFileName?: string
   verifiedBy?: string
   verifiedAt?: string
+  verifiedDesignation?: string
 }
 
 export interface Medicine {
@@ -223,7 +217,7 @@ export interface InvoiceLineItem {
 export interface Payment {
   id: string
   amount: number
-  method: "Cash" | "Card" | "Bank Transfer" | "Mobile Wallet"
+  method: "Cash" | "Card" | "Bank Transfer" | "Mobile Wallet" | "Online"
   date: string
   receivedBy?: string
   notes?: string
@@ -242,6 +236,8 @@ export interface Invoice {
   payments: Payment[]
   status: InvoiceStatus
   voidReason?: string
+  voidedAt?: string
+  voidedBy?: string
   auditTrail: { action: string; date: string; by: string; note?: string }[]
 }
 
@@ -280,7 +276,7 @@ export interface Bed {
 }
 
 export type AdmissionStatus = "Admitted" | "Discharged" | "Transferred Out"
-export type AdmissionType = "Emergency" | "Planned" | "Referral" | "Transfer" | "Day care"
+export type AdmissionType = "Emergency" | "Planned" | "Referral"
 
 export interface Admission {
   id: string
@@ -295,7 +291,6 @@ export interface Admission {
   admissionDate: string
   reason: string
   depositAmount: number
-  dailyRate?: number
   notes?: string
   status: AdmissionStatus
   dischargeDate?: string
@@ -341,10 +336,7 @@ export interface Surgery {
   procedureName: string
   surgeonId: string
   surgeonName: string
-  assistantSurgeonName?: string
   otRoom: string
-  priority?: "Elective" | "Urgent" | "Emergency"
-  anesthesiaType?: string
   scheduledDate: string // ISO date
   scheduledTime: string // HH:mm
   durationMinutes: number

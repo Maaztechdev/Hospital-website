@@ -43,6 +43,6 @@ export const authController = {
 
   me: asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
-    sendSuccess(res, 200, { data: req.user });
+    sendSuccess(res, 200, { data: await authService.getCurrentUser(req.user.sub) });
   }),
 };

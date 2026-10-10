@@ -8,12 +8,13 @@ export type UploadKind = "document" | "image";
 
 const allowedTypes: Record<UploadKind, Set<string>> = {
   document: new Set(["application/pdf", "image/jpeg", "image/png"]),
-  image: new Set(["image/jpeg", "image/png", "image/svg+xml", "image/x-icon", "application/dicom", "application/octet-stream"]),
+  image: new Set(["image/jpeg", "image/jfif", "image/png", "image/svg+xml", "image/x-icon", "application/dicom", "application/octet-stream"]),
 };
 
 const extensions: Record<string, string> = {
   "application/pdf": ".pdf",
   "image/jpeg": ".jpg",
+  "image/jfif": ".jpg",
   "image/png": ".png",
   "application/dicom": ".dcm",
   "application/octet-stream": ".dcm",
@@ -27,7 +28,7 @@ function rootDirectory() {
 
 function hasExpectedSignature(buffer: Buffer, mimeType: string) {
   if (mimeType === "application/pdf") return buffer.subarray(0, 5).toString() === "%PDF-";
-  if (mimeType === "image/jpeg") return buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+  if (mimeType === "image/jpeg" || mimeType === "image/jfif") return buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
   if (mimeType === "image/png") return buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   if (mimeType === "image/svg+xml") return buffer.toString("utf8", 0, 1000).includes("<svg");
   if (mimeType === "image/x-icon") return buffer.subarray(0, 4).equals(Buffer.from([0, 0, 1, 0]));

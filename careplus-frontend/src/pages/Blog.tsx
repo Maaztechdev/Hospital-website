@@ -8,9 +8,10 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { EmptyState } from "@/components/shared/EmptyState"
 import { blogPosts } from "@/data/blog"
+import { formatDate as formatHospitalDate } from "@/lib/dateTime"
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
+  return formatHospitalDate(iso)
 }
 
 export default function Blog() {

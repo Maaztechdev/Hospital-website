@@ -20,6 +20,15 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`CONSISTENCY FAILURE: ${message}`)
 }
 
+function addOneDay(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number)
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const daysInMonth = month === 2 ? (leap ? 29 : 28) : [4, 6, 9, 11].includes(month) ? 30 : 31
+  if (day < daysInMonth) return `${year}-${String(month).padStart(2, "0")}-${String(day + 1).padStart(2, "0")}`
+  if (month < 12) return `${year}-${String(month + 1).padStart(2, "0")}-01`
+  return `${year + 1}-01-01`
+}
+
 async function auditFor(token: string, entityId: string) {
   const result = await api<AnyRecord>(`/audit-logs?entityId=${entityId}&limit=200`, token)
   return (result.items ?? result) as AnyRecord[]
@@ -37,7 +46,7 @@ async function main() {
 
   const patient = await api<AnyRecord>("/patients", token, {
     method: "POST",
-    body: JSON.stringify({ firstName: "Lifecycle", lastName: `Audit-${runId}`, dateOfBirth: "1990-01-01", gender: "OTHER", phone: `0300${Date.now().toString().slice(-7)}` }),
+    body: JSON.stringify({ firstName: "Lifecycle", lastName: `Audit-${runId}`, age: 35, gender: "OTHER", phone: `0300${Date.now().toString().slice(-7)}` }),
   })
   assert(patient.id && patient.mrNumber, "patient registration did not return an id and MR number")
   await expectAudit(token, patient.id, "CREATE", "patient")
@@ -45,7 +54,8 @@ async function main() {
   const doctors = await api<AnyRecord[]>("/appointments/doctors", token)
   const doctor = doctors[0]
   assert(doctor?.id, "no available doctor is seeded")
-  const tomorrowDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
+  const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())
+  const tomorrowDate = addOneDay(todayKey)
   const slots = await api<AnyRecord>(`/appointments/doctors/${doctor.id}/slots?date=${tomorrowDate}`, token)
   const timeSlot = slots.availableSlots?.[0]
   assert(timeSlot, "doctor has no available appointment slot tomorrow")

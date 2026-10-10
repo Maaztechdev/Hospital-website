@@ -10,7 +10,7 @@ function SidebarContent({ collapsed }: { collapsed: boolean }) {
   const items = currentUser ? NAV_BY_ROLE[currentUser.role] : []
 
   return (
-    <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2 py-4 cp-scrollbar">
+    <nav className="no-scrollbar flex flex-1 flex-col gap-1 overflow-y-auto px-2 py-4">
       {items.map((item) => {
         const Icon = item.icon
         if (item.disabled) {
@@ -62,7 +62,7 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "no-print sticky top-0 hidden h-screen shrink-0 flex-col bg-[var(--cp-sidebar)] transition-[width] duration-200 ease-out sm:flex",
+        "no-print hidden h-full shrink-0 flex-col bg-[var(--cp-sidebar)] transition-[width] duration-200 ease-out sm:flex",
         sidebarCollapsed ? "w-[68px]" : "w-64"
       )}
     >
@@ -70,12 +70,7 @@ export function Sidebar() {
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white">
           <Cross className="h-5 w-5" />
         </span>
-        {!sidebarCollapsed && (
-          <div className="leading-tight">
-            <p className="text-sm font-bold text-white">{profile.name}</p>
-            <p className="text-[11px] text-white/50">Hospital</p>
-          </div>
-        )}
+        {!sidebarCollapsed && <p className="max-w-[172px] text-xs font-bold leading-tight text-white" title={profile.name}>{profile.name}</p>}
       </div>
       <SidebarContent collapsed={sidebarCollapsed} />
       <button
@@ -101,10 +96,7 @@ export function MobileSidebarDrawer({ open, onClose }: { open: boolean; onClose:
             <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white">
               <Cross className="h-5 w-5" />
             </span>
-            <div className="leading-tight">
-              <p className="text-sm font-bold text-white">{profile.name}</p>
-              <p className="text-[11px] text-white/50">Hospital</p>
-            </div>
+            <p className="max-w-[190px] text-xs font-bold leading-tight text-white" title={profile.name}>{profile.name}</p>
           </div>
           <button onClick={onClose} aria-label="Close menu" className="text-white/70 hover:text-white">
             <X className="h-5 w-5" />

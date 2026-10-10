@@ -1,13 +1,13 @@
 import * as React from "react"
-import { useNavigate } from "react-router-dom"
-import { Menu, Search, Bell, HelpCircle, ChevronDown, LogOut, UserCircle2, User, Stethoscope, BedDouble } from "lucide-react"
+import { useLocation, useNavigate } from "react-router-dom"
+import { Menu, Search, Bell, HelpCircle, ChevronDown, LogOut, UserCircle2, User, Stethoscope, BedDouble, Pill } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { ROLE_LABELS, type AppNotification } from "@/dashboard/types"
-import { api, clearSession, type ApiNotification } from "@/lib/api"
-import { formatTimeAgo } from "@/dashboard/lib/format"
+import { api, logoutAndClearSession, type ApiMedicine, type ApiNotification } from "@/lib/api"
+import { formatStaffDisplayName, formatTimeAgo } from "@/dashboard/lib/format"
 import { MobileSidebarDrawer } from "@/dashboard/components/Sidebar"
-import { useHospitalProfile } from "@/lib/hospitalProfile"
+import { useToast } from "@/hooks/use-toast"
 
 function useClickOutside<T extends HTMLElement>(onOutside: () => void) {
   const ref = React.useRef<T>(null)
@@ -44,9 +44,10 @@ function toDashboardNotification(notification: ApiNotification): AppNotification
 }
 
 export function Header() {
-  const profile = useHospitalProfile()
   const { currentUser, dispatch, patients, doctors, beds } = useDashboard()
+  const location = useLocation()
   const navigate = useNavigate()
+  const { toast } = useToast()
   const [mobileOpen, setMobileOpen] = React.useState(false)
   const [notifOpen, setNotifOpen] = React.useState(false)
   const [profileOpen, setProfileOpen] = React.useState(false)
@@ -54,6 +55,10 @@ export function Header() {
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [notifications, setNotifications] = React.useState<AppNotification[]>([])
   const [unread, setUnread] = React.useState(0)
+  const [medicineResults, setMedicineResults] = React.useState<ApiMedicine[]>([])
+  const [medicineLoading, setMedicineLoading] = React.useState(false)
+  const pharmacySearchMode = location.pathname.startsWith("/dashboard/pharmacy")
+  const q = search.trim().toLowerCase()
 
   const notifRef = useClickOutside<HTMLDivElement>(() => setNotifOpen(false))
   const profileRef = useClickOutside<HTMLDivElement>(() => setProfileOpen(false))
@@ -74,6 +79,29 @@ export function Header() {
     return () => window.clearInterval(interval)
   }, [refreshNotifications])
 
+  React.useEffect(() => {
+    if (!pharmacySearchMode || !q) {
+      setMedicineResults([])
+      setMedicineLoading(false)
+      return
+    }
+    let active = true
+    setMedicineLoading(true)
+    const timer = window.setTimeout(() => {
+      api.listMedicines(search.trim()).then((items) => {
+        if (active) setMedicineResults(items.slice(0, 6))
+      }).catch((error) => {
+        if (active) toast({ title: "Medicine search failed", description: error instanceof Error ? error.message : "Please try again.", variant: "error" })
+      }).finally(() => {
+        if (active) setMedicineLoading(false)
+      })
+    }, 250)
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [pharmacySearchMode, q, search, toast])
+
   async function markNotificationRead(notification: AppNotification) {
     if (notification.read) return
     try {
@@ -92,22 +120,23 @@ export function Header() {
     } catch { }
   }
 
-  const q = search.trim().toLowerCase()
   const searchResults = q.length === 0 ? null : {
     patients: patients.filter((p) => p.name.toLowerCase().includes(q) || p.mrNumber.toLowerCase().includes(q)).slice(0, 4),
     doctors: doctors.filter((d) => d.name.toLowerCase().includes(q) || d.department.toLowerCase().includes(q)).slice(0, 3),
     beds: beds.filter((b) => b.bedNumber.toLowerCase().includes(q) || b.patientName?.toLowerCase().includes(q)).slice(0, 3),
   }
-  const hasResults = !!searchResults && (searchResults.patients.length + searchResults.doctors.length + searchResults.beds.length > 0)
+  const hasResults = pharmacySearchMode
+    ? medicineResults.length > 0
+    : !!searchResults && (searchResults.patients.length + searchResults.doctors.length + searchResults.beds.length > 0)
 
   function onSearchSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (search.trim()) navigate(`/dashboard/patients?q=${encodeURIComponent(search.trim())}`)
+    if (search.trim()) navigate(pharmacySearchMode ? `/dashboard/pharmacy?search=${encodeURIComponent(search.trim())}` : `/dashboard/patients?q=${encodeURIComponent(search.trim())}`)
     setSearchOpen(false)
   }
 
   return (
-    <header className="no-print sticky top-0 z-40 flex h-16 items-center gap-3 border-b border-[var(--cp-border)] bg-[var(--cp-surface)]/95 px-4 backdrop-blur sm:px-6">
+    <header className="no-print sticky top-0 z-40 flex h-16 shrink-0 items-center gap-3 border-b border-[var(--cp-border)] bg-[var(--cp-surface)]/95 px-4 backdrop-blur sm:px-6">
       <button
         onClick={() => setMobileOpen(true)}
         aria-label="Open menu"
@@ -117,22 +146,30 @@ export function Header() {
       </button>
       <MobileSidebarDrawer open={mobileOpen} onClose={() => setMobileOpen(false)} />
 
-      <div className="hidden leading-tight sm:block">
-        <p className="text-sm font-bold text-[var(--cp-ink)]">{profile.name}</p>
-      </div>
-
-      <form onSubmit={onSearchSubmit} className="relative ml-2 hidden max-w-sm flex-1 md:block" ref={searchRef}>
+      <form onSubmit={onSearchSubmit} className="relative ml-1 min-w-0 max-w-sm flex-1" ref={searchRef}>
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--cp-ink-faint)]" />
         <input
           value={search}
           onChange={(e) => { setSearch(e.target.value); setSearchOpen(true) }}
           onFocus={() => setSearchOpen(true)}
-          placeholder="Search patients, doctors, beds…"
+          placeholder={pharmacySearchMode ? "Search medicines by name or barcode…" : "Search patients, doctors, beds…"}
           className="h-9 w-full rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] pl-9 pr-3 text-sm text-[var(--cp-ink)] placeholder:text-[var(--cp-ink-faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-primary)]"
         />
         {searchOpen && q.length > 0 && (
           <div className="absolute left-0 right-0 z-50 mt-2 overflow-hidden rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] shadow-xl">
-            {!hasResults ? (
+            {pharmacySearchMode ? (
+              medicineLoading ? <p className="px-4 py-4 text-center text-xs text-[var(--cp-ink-soft)]">Searching medicines…</p>
+                : !hasResults ? <p className="px-4 py-4 text-center text-xs text-[var(--cp-ink-soft)]">No medicines match "{search}"</p>
+                  : <div className="max-h-80 overflow-y-auto cp-scrollbar">
+                    {medicineResults.map((medicine) => {
+                      const stock = medicine.batches.reduce((total, batch) => total + batch.stockQuantity, 0)
+                      return <button key={medicine.id} type="button" onClick={() => { navigate(`/dashboard/pharmacy?search=${encodeURIComponent(medicine.name)}`); setSearchOpen(false); setSearch("") }} className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-[var(--cp-bg)]">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--cp-primary-light)] text-[var(--cp-primary)]"><Pill className="h-3.5 w-3.5" /></span>
+                        <span><span className="block text-sm text-[var(--cp-ink)]">{medicine.name}</span><span className="block text-xs text-[var(--cp-ink-soft)]">{medicine.genericName ?? medicine.strength ?? "Medicine"} · {stock} in stock</span></span>
+                      </button>
+                    })}
+                  </div>
+            ) : !hasResults ? (
               <p className="px-4 py-4 text-center text-xs text-[var(--cp-ink-soft)]">No matches for "{search}"</p>
             ) : (
               <div className="max-h-80 overflow-y-auto cp-scrollbar">
@@ -247,7 +284,7 @@ export function Header() {
               <UserCircle2 className="h-5 w-5" />
             </span>
             <span className="hidden text-left leading-tight sm:block">
-              <span className="block text-xs font-semibold text-[var(--cp-ink)]">{currentUser?.name}</span>
+              <span className="block text-xs font-semibold text-[var(--cp-ink)]">{currentUser ? formatStaffDisplayName(currentUser.name, currentUser.role) : ""}</span>
               <span className="block text-[10px] text-[var(--cp-ink-soft)]">{currentUser ? ROLE_LABELS[currentUser.role] : ""}</span>
             </span>
             <ChevronDown className="hidden h-3.5 w-3.5 text-[var(--cp-ink-faint)] sm:block" />
@@ -255,7 +292,19 @@ export function Header() {
           {profileOpen && (
             <div className="absolute right-0 z-50 mt-2 w-48 overflow-hidden rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-1 shadow-xl">
               <button
-                onClick={async () => { try { await api.logout() } finally { clearSession(); dispatch({ type: "LOGOUT" }); navigate("/dashboard/login") } }}
+                onClick={async () => {
+                  try {
+                    await logoutAndClearSession()
+                    dispatch({ type: "LOGOUT" })
+                    navigate("/dashboard/login")
+                  } catch (error) {
+                    toast({
+                      title: "Unable to log out",
+                      description: error instanceof Error ? `Save your consultation draft and try again. ${error.message}` : "Save your consultation draft and try again.",
+                      variant: "error",
+                    })
+                  }
+                }}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-[var(--cp-critical)] hover:bg-[var(--cp-critical-light)]"
               >
                 <LogOut className="h-4 w-4" /> Log out

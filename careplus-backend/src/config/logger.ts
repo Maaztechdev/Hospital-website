@@ -7,9 +7,13 @@ export const logger = pino({
     paths: [
       "req.headers.authorization",
       "req.headers.cookie",
+      "req.headers.x-discount-approval-pin",
+      "req.headers.x-discount-approval-token",
       "req.body.password",
       "req.body.currentPassword",
       "req.body.newPassword",
+      "req.body.currentPin",
+      "req.body.newPin",
       "req.body.refreshToken",
       "req.body.token",
       "req.body.devResetToken",

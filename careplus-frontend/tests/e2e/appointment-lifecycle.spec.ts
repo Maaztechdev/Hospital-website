@@ -27,29 +27,43 @@ test("appointment lifecycle completes across receptionist and doctor roles", asy
   const receptionistHeaders = { Authorization: `Bearer ${receptionist.accessToken}` }
   const doctorHeaders = { Authorization: `Bearer ${doctor.accessToken}` }
 
-  const patientsResponse = await request.get(`${apiBase}/patients?limit=1`, { headers: receptionistHeaders })
   const doctorsResponse = await request.get(`${apiBase}/appointments/doctors`, { headers: receptionistHeaders })
-  expect(patientsResponse.ok()).toBeTruthy()
   expect(doctorsResponse.ok()).toBeTruthy()
-  const patient = (await patientsResponse.json()).data[0] as { id: string }
-  const selectedDoctor = (await doctorsResponse.json()).data.find((item: { user: { name: string } }) => item.user.name === "Dr. Ahmed Khan")
+  const selectedDoctor = (await doctorsResponse.json()).data.find((item: { user: { name: string }; department?: { id: string } | null }) => item.user.name === "Dr. Ahmed Khan") as { id: string; department?: { id: string } | null } | undefined
   expect(selectedDoctor).toBeTruthy()
+  if (!selectedDoctor?.department) throw new Error("Dr. Ahmed Khan must belong to a department for this lifecycle test")
 
-  const date = new Date()
-  date.setUTCDate(date.getUTCDate() + 1)
-  while ([0, 6].includes(date.getUTCDay())) date.setUTCDate(date.getUTCDate() + 1)
-  const appointmentDate = date.toISOString().slice(0, 10)
-  const slotsResponse = await request.get(`${apiBase}/appointments/doctors/${selectedDoctor.id}/slots?date=${appointmentDate}`, { headers: receptionistHeaders })
-  expect(slotsResponse.ok()).toBeTruthy()
-  const slots = (await slotsResponse.json()).data.availableSlots as string[]
+  const hospitalToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())
+  const firstDate = new Date(`${hospitalToday}T00:00:00.000Z`)
+  let appointmentDate = ""
+  let slots: string[] = []
+  for (let offset = 1; offset <= 35 && slots.length === 0; offset += 1) {
+    const date = new Date(firstDate)
+    date.setUTCDate(date.getUTCDate() + offset)
+    if ([0, 6].includes(date.getUTCDay())) continue
+    const candidateDate = date.toISOString().slice(0, 10)
+    const slotsResponse = await request.get(`${apiBase}/appointments/doctors/${selectedDoctor.id}/slots?date=${candidateDate}`, { headers: receptionistHeaders })
+    expect(slotsResponse.ok()).toBeTruthy()
+    slots = (await slotsResponse.json()).data.availableSlots as string[]
+    if (slots.length > 0) appointmentDate = candidateDate
+  }
   expect(slots.length).toBeGreaterThan(0)
 
-  const createResponse = await request.post(`${apiBase}/appointments`, {
-    headers: receptionistHeaders,
-    data: { patientId: patient.id, doctorId: selectedDoctor.id, appointmentDate, timeSlot: slots[0], appointmentType: "CONSULTATION", source: "WALK_IN" },
+  const createResponse = await request.post(`${apiBase}/appointments/public`, {
+    data: {
+      fullName: `Lifecycle E2E ${Date.now()}`,
+      phone: `0300${String(Date.now()).slice(-7)}`,
+      age: 32,
+      doctorId: selectedDoctor.id,
+      departmentId: selectedDoctor.department.id,
+      appointmentDate,
+      timeSlot: slots[0],
+      reason: "Lifecycle status workflow test",
+    },
   })
-  expect(createResponse.ok()).toBeTruthy()
-  const created = (await createResponse.json()).data as Appointment
+  const createBody = await createResponse.json()
+  expect(createResponse.ok(), JSON.stringify(createBody)).toBeTruthy()
+  const created = createBody.data as Appointment
   expect(created.status).toBe("PENDING_APPROVAL")
   expect((await getAppointment(request, created.id, receptionist.accessToken)).status).toBe("PENDING_APPROVAL")
 
@@ -57,15 +71,12 @@ test("appointment lifecycle completes across receptionist and doctor roles", asy
   expect(approveResponse.ok()).toBeTruthy()
   expect((await getAppointment(request, created.id, doctor.accessToken)).status).toBe("CONFIRMED")
 
-  const checkInResponse = await request.post(`${apiBase}/opd-queue/${selectedDoctor.id}/call-next`, { headers: receptionistHeaders })
-  expect(checkInResponse.ok()).toBeTruthy()
-  expect((await getAppointment(request, created.id, receptionist.accessToken)).status).toBe("WAITING")
-
   const startResponse = await request.post(`${apiBase}/opd-queue/${created.id}/start-consultation`, { headers: doctorHeaders })
   expect(startResponse.ok()).toBeTruthy()
   expect((await getAppointment(request, created.id, doctor.accessToken)).status).toBe("IN_CONSULTATION")
 
   const doneResponse = await request.post(`${apiBase}/appointments/${created.id}/mark-done`, { headers: doctorHeaders })
-  expect(doneResponse.ok()).toBeTruthy()
-  expect((await getAppointment(request, created.id, doctor.accessToken)).status).toBe("DONE")
+  const doneBody = await doneResponse.json()
+  expect(doneResponse.ok(), JSON.stringify(doneBody)).toBeTruthy()
+  expect((await getAppointment(request, created.id, doctor.accessToken)).status).toBe("COMPLETED")
 })

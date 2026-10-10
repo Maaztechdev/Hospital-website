@@ -14,13 +14,13 @@ export const createUltrasoundOrderSchema = z.object({
 
 export const scheduleUltrasoundSchema = z.object({
   scheduledAt: z.coerce.date(),
-  technicianId: z.string().uuid().optional(),
+  technicianId: z.string({ required_error: "Please assign a staff member" }).uuid("Please select a valid staff member"),
 });
 
 export const completeUltrasoundSchema = z.object({
   findings: z.string().min(1).max(10000),
   impression: z.string().min(1).max(5000),
-  imageUrls: z.array(z.string().url()).max(30).optional(),
+  imageUrls: z.array(z.string().refine((value) => /^https?:\/\//.test(value) || value.startsWith("/api/v1/files/"), "Image URL must be a valid uploaded file reference")).max(30).optional(),
 });
 
 export const listUltrasoundOrdersQuerySchema = z.object({

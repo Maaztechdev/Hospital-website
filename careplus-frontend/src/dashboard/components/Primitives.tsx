@@ -131,6 +131,8 @@ export function Modal({
   title,
   description,
   children,
+  footer,
+  className,
   size = "md",
 }: {
   open: boolean
@@ -138,18 +140,72 @@ export function Modal({
   title: string
   description?: string
   children: React.ReactNode
+  footer?: React.ReactNode
+  className?: string
   size?: "sm" | "md" | "lg" | "xl"
 }) {
+  const dialogRef = React.useRef<HTMLDivElement>(null)
+  const onCloseRef = React.useRef(onClose)
+  onCloseRef.current = onClose
+
   React.useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
+    const dialog = dialogRef.current
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const isTopDialog = () => {
+      const dialogs = document.querySelectorAll<HTMLElement>("[data-modal-dialog]")
+      return dialogs[dialogs.length - 1] === dialog
+    }
+    const focusableSelector = [
+      "a[href]",
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",")
+    const getFocusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
+      .filter((element) => element.getAttribute("aria-hidden") !== "true" && element.offsetParent !== null)
+    const initialFocus = window.requestAnimationFrame(() => (getFocusable()[0] ?? dialog)?.focus())
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (!isTopDialog()) return
+        e.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (e.key !== "Tab" || !dialog || !isTopDialog()) return
+      const focusable = getFocusable()
+      if (focusable.length === 0) {
+        e.preventDefault()
+        dialog.focus()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    const onFocusIn = (e: FocusEvent) => {
+      if (dialog && isTopDialog() && !dialog.contains(e.target as Node)) (getFocusable()[0] ?? dialog).focus()
+    }
+    const previousOverflow = document.body.style.overflow
     document.addEventListener("keydown", onKey)
+    document.addEventListener("focusin", onFocusIn)
     document.body.style.overflow = "hidden"
     return () => {
+      window.cancelAnimationFrame(initialFocus)
       document.removeEventListener("keydown", onKey)
-      document.body.style.overflow = ""
+      document.removeEventListener("focusin", onFocusIn)
+      document.body.style.overflow = previousOverflow
+      previouslyFocused?.focus()
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 
@@ -159,12 +215,16 @@ export function Modal({
     <div className="fixed inset-0 z-[90] flex items-end justify-center sm:items-center sm:p-4">
       <div className="animate-[cp-fade-in_0.18s_ease-out] fixed inset-0 bg-[var(--cp-ink)]/40" onClick={onClose} aria-hidden="true" />
       <div
+        ref={dialogRef}
+        data-modal-dialog
         role="dialog"
         aria-modal="true"
         aria-labelledby="cp-modal-title"
+        tabIndex={-1}
         className={cn(
           "animate-[cp-slide-in_0.22s_cubic-bezier(0.16,1,0.3,1)] relative flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl border border-[var(--cp-border)] bg-[var(--cp-surface)] shadow-2xl sm:rounded-2xl",
-          widths[size]
+          widths[size],
+          className
         )}
       >
         <div className="flex items-start justify-between border-b border-[var(--cp-border)] px-5 py-4">
@@ -180,7 +240,8 @@ export function Modal({
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="cp-scrollbar overflow-y-auto px-5 py-4">{children}</div>
+        <div className="cp-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        {footer && <div className="shrink-0 border-t border-[var(--cp-border)] bg-[var(--cp-surface)] px-5 py-3">{footer}</div>}
       </div>
     </div>
   )

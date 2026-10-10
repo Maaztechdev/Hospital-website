@@ -13,6 +13,9 @@ export function BedDetailDrawer({
   onDischarge,
   onMarkClean,
   onMarkMaintenance,
+  canManageBeds,
+  canTakePayments,
+  onAddDeposit,
 }: {
   bed: Bed | null
   onClose: () => void
@@ -20,6 +23,9 @@ export function BedDetailDrawer({
   onDischarge: (bed: Bed) => void
   onMarkClean: (bed: Bed) => void
   onMarkMaintenance: (bed: Bed) => void
+  canManageBeds: boolean
+  canTakePayments: boolean
+  onAddDeposit: (bed: Bed) => void
 }) {
   React.useEffect(() => {
     if (!bed) return
@@ -81,6 +87,7 @@ export function BedDetailDrawer({
               <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]"><User className="h-4 w-4 text-[var(--cp-ink-faint)]" /> {bed.patientName} <span className="cp-tabular text-xs text-[var(--cp-ink-soft)]">({bed.mrNumber})</span></div>
               <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]"><Stethoscope className="h-4 w-4 text-[var(--cp-ink-faint)]" /> {bed.doctorName}</div>
               {bed.admittedAt && <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]"><CalendarClock className="h-4 w-4 text-[var(--cp-ink-faint)]" /> Admitted {formatDateTime(bed.admittedAt)}</div>}
+              {bed.depositPending && <p className="inline-flex w-fit rounded-full bg-[var(--cp-warning-light)] px-2 py-1 text-xs font-semibold text-[var(--cp-warning)]">Deposit pending</p>}
             </div>
           ) : (
             <div className="mt-5 rounded-xl border border-dashed border-[var(--cp-border-strong)] p-4 text-center text-sm text-[var(--cp-ink-soft)]">
@@ -92,17 +99,18 @@ export function BedDetailDrawer({
         <div className="flex flex-col gap-2 border-t border-[var(--cp-border)] px-5 py-4">
           {bed.status === "Occupied" && (
             <>
+              {bed.depositPending && canTakePayments && <Button size="sm" variant="outline" onClick={() => onAddDeposit(bed)}>Add deposit</Button>}
               <Button size="sm" variant="outline" onClick={() => onTransfer(bed)}><ArrowRightLeft className="h-4 w-4" /> Transfer Patient</Button>
               <Button size="sm" variant="emergency" onClick={() => onDischarge(bed)}><LogOut className="h-4 w-4" /> Discharge Patient</Button>
             </>
           )}
-          {bed.status === "Cleaning" && (
+          {canManageBeds && bed.status === "Cleaning" && (
             <Button size="sm" onClick={() => onMarkClean(bed)}><CheckCircle2 className="h-4 w-4" /> Mark as Available</Button>
           )}
-          {bed.status === "Available" && (
+          {canManageBeds && bed.status === "Available" && (
             <Button size="sm" variant="outline" onClick={() => onMarkMaintenance(bed)}><Wrench className="h-4 w-4" /> Send for Maintenance</Button>
           )}
-          {bed.status === "Maintenance" && (
+          {canManageBeds && bed.status === "Maintenance" && (
             <Button size="sm" onClick={() => onMarkClean(bed)}><Sparkles className="h-4 w-4" /> Return to Service</Button>
           )}
         </div>

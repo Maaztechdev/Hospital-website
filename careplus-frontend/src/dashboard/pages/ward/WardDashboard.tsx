@@ -8,6 +8,7 @@ import { BedDetailDrawer } from "@/dashboard/components/ward/BedDetailDrawer"
 import { AdmitPatientModal } from "@/dashboard/pages/ward/AdmitPatientModal"
 import { TransferModal } from "@/dashboard/pages/ward/TransferModal"
 import { DischargeModal } from "@/dashboard/pages/ward/DischargeModal"
+import { AddAdmissionDepositModal } from "@/dashboard/components/ward/AddAdmissionDepositModal"
 import { Button } from "@/components/ui/button"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { bedsSummary } from "@/dashboard/data/wardData"
@@ -24,9 +25,11 @@ export default function WardDashboard() {
   const [admitOpen, setAdmitOpen] = React.useState(false)
   const [transferBed, setTransferBed] = React.useState<Bed | null>(null)
   const [dischargeBed, setDischargeBed] = React.useState<Bed | null>(null)
+  const [depositBed, setDepositBed] = React.useState<Bed | null>(null)
   const summary = bedsSummary(beds)
   const canManageBeds = currentUser?.role === "admin" || currentUser?.role === "nurse"
-  const canAdmitPatient = ["admin", "nurse", "receptionist", "doctor"].includes(currentUser?.role ?? "")
+  const canTakePayments = ["admin", "billing_manager", "receptionist"].includes(currentUser?.role ?? "")
+  const canAdmitPatient = ["admin", "billing_manager", "nurse", "receptionist", "doctor"].includes(currentUser?.role ?? "")
 
   // keep drawer bed fresh as global state changes (e.g. after transfer/discharge)
   const liveDrawerBed = drawerBed ? beds.find((b) => b.id === drawerBed.id) ?? null : null
@@ -108,9 +111,18 @@ export default function WardDashboard() {
         onMarkClean={(b) => { void updateBedStatus(b, "AVAILABLE") }}
         onMarkMaintenance={(b) => { void updateBedStatus(b, "MAINTENANCE") }}
         canManageBeds={canManageBeds}
+        canTakePayments={canTakePayments}
+        onAddDeposit={(bed) => setDepositBed(bed)}
       />
 
       <AdmitPatientModal open={admitOpen} onClose={() => setAdmitOpen(false)} />
+      <AddAdmissionDepositModal
+        open={Boolean(depositBed?.admissionId)}
+        admissionId={depositBed?.admissionId ?? null}
+        patientName={depositBed?.patientName ?? "the patient"}
+        onClose={() => setDepositBed(null)}
+        onRecorded={refreshWardState}
+      />
       <TransferModal bed={transferBed} onClose={() => setTransferBed(null)} />
       <DischargeModal bed={dischargeBed} onClose={() => setDischargeBed(null)} />
     </div>

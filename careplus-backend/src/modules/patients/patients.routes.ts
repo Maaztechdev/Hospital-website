@@ -3,8 +3,10 @@ import { authenticate } from "@common/middleware/authenticate";
 import { requireRole } from "@common/middleware/requireRole";
 import { validate } from "@common/middleware/validate";
 import { patientsController } from "./patients.controller";
+import { permissions } from "@common/permissions";
 import {
   createPatientSchema,
+  clinicalHistoryUpdateSchema,
   idParamSchema,
   listPatientsQuerySchema,
   mergePatientsSchema,
@@ -24,9 +26,13 @@ router.use(authenticate);
  *     responses:
  *       200: { description: OK }
  */
-router.get("/", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ query: listPatientsQuerySchema }), patientsController.list);
+router.get("/", requireRole(permissions.patients.view), validate({ query: listPatientsQuerySchema }), patientsController.list);
 
-router.get("/:id", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ params: idParamSchema }), patientsController.getById);
+router.get("/:id/profile", requireRole(permissions.patients.view), validate({ params: idParamSchema }), patientsController.getProfile);
+router.get("/:id/print-summary", requireRole(permissions.patients.view), validate({ params: idParamSchema }), patientsController.printSummary);
+router.get("/:id/clinical-summary", requireRole(permissions.patients.view), validate({ params: idParamSchema }), patientsController.getClinicalSummary);
+router.patch("/:id/clinical-summary", requireRole(["ADMIN", "DOCTOR"]), validate({ params: idParamSchema, body: clinicalHistoryUpdateSchema }), patientsController.updateClinicalHistory);
+router.get("/:id", requireRole(permissions.patients.view), validate({ params: idParamSchema }), patientsController.getById);
 
 /**
  * @openapi
@@ -40,14 +46,14 @@ router.get("/:id", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), va
  */
 router.post(
   "/",
-  requireRole(["ADMIN", "RECEPTIONIST"]),
+  requireRole(permissions.patients.create),
   validate({ body: createPatientSchema }),
   patientsController.create
 );
 
 router.patch(
   "/:id",
-  requireRole(["ADMIN", "RECEPTIONIST"]),
+  requireRole(permissions.patients.edit),
   validate({ params: idParamSchema, body: updatePatientSchema }),
   patientsController.update
 );

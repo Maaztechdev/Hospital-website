@@ -1,0 +1,337 @@
+# Pharmacy POS Progress
+
+## Task: Dedicated Pharmacy Billing page
+
+- **Status:** DONE
+- **Files changed:**
+  - `careplus-backend/prisma/schema.prisma`
+  - `careplus-backend/prisma/migrations/20261008190000_add_medicine_barcode/migration.sql`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.validators.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/tests/unit/pharmacy-billing-inputs.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/DashboardApp.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyDashboard.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyBillingPage.tsx`
+  - `careplus-frontend/tests/e2e/pharmacy-billing.spec.ts`
+- **Assumptions made:**
+  - Tax is entered as a fixed PKR amount; discount is a percentage of the invoice subtotal.
+  - “Other” payment is stored as `BANK_TRANSFER`, matching the existing payment enum. Credit remains visible but disabled until the Khata task.
+  - Patient linkage uses the existing patient search API and is persisted on the invoice; walk-in name and phone remain available.
+  - The legacy sale modal remains reachable at `/dashboard/pharmacy/legacy-sale`; the Pharmacy dashboard’s New Sale action now opens the dedicated page.
+  - POS availability and displayed FEFO batches exclude inactive, empty, and expired batches; final stock allocation continues through the existing transactional FEFO sale service.
+  - Barcode is nullable so an existing medicine barcode can be cleared from the edit form.
+- **Test results:**
+  - Backend build (`npm run build`): passed.
+  - Backend Jest suite (`npm test`): **32 suites passed, 305 tests passed, 0 failed**. The initial run had 2 failures because the test database had not yet applied the new barcode migration; applying it and rerunning resolved both. A final rerun after barcode-clearing support also passed all 305 tests.
+  - Focused pharmacy unit tests: **2 suites passed, 7 tests passed, 0 failed**, including the existing FEFO unit tests.
+  - Frontend production build (`npm run build`): passed; Vite reports the >500 kB chunk-size warning.
+  - Pharmacy billing E2E (`npx playwright test tests/e2e/pharmacy-billing.spec.ts`): **1 passed, 0 failed** on the final run. It checks the dedicated page, billing fields, disabled Credit tab, and legacy modal route.
+  - Prisma client generated successfully; barcode migration applied to the test database.
+- **Unresolved problems:** None.
+
+## Task: Pharmacy discount controls and audit trail
+
+- **Status:** DONE
+- **Files changed:**
+  - `careplus-backend/prisma/schema.prisma`
+  - `careplus-backend/prisma/migrations/20261008200000_pharmacy_discount_audit/migration.sql`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.validators.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.routes.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/src/modules/settings/settings.routes.ts`
+  - `careplus-backend/src/modules/reports/reports.routes.ts`
+  - `careplus-backend/tests/unit/pharmacy-discount-audit.test.ts`
+  - `careplus-backend/tests/integration/route-access-contract.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyBillingPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyDiscountAuditPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/settings/SettingsPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/reports/ReportsPage.tsx`
+  - `careplus-frontend/src/dashboard/DashboardApp.tsx`
+  - `careplus-frontend/src/dashboard/nav.ts`
+  - `careplus-frontend/tests/e2e/pharmacy-discount-audit.spec.ts`
+- **Assumptions made:**
+  - The cashier maximum defaults to 10% and is configurable from 0–100% by Admin only.
+  - Above-limit sales require an Admin login confirmation (or an Admin cashier) and a non-empty reason; the server validates the Admin account and records the approving user.
+  - Audit rows are created for positive pharmacy-sale discounts. The report total is the sum of those non-void pharmacy discounts for the selected date range.
+  - Cashier filtering is by a case-insensitive partial match on cashier name; date filters use Pakistan local day boundaries.
+- **Test results:**
+  - Prisma schema validation and Prisma Client generation: passed.
+  - Discount audit migration applied successfully to the shared test database.
+  - Backend build (`npm run build`): passed.
+  - Backend Jest (`npm test -- --runInBand`): **33 suites passed, 309 tests passed, 0 failed**. Jest reported one lingering Redis `TCPWRAP` handle after all suites completed; the completed test runner was stopped because that connection kept the process open.
+  - Frontend production build (`npm run build`): passed; Vite reports the existing >500 kB chunk-size warning.
+  - Pharmacy discount audit E2E (`npx playwright test tests/e2e/pharmacy-discount-audit.spec.ts`): **1 passed, 0 failed**.
+- **Unresolved problems:** Jest’s Redis test-process handle remains an existing environment/test-cleanup issue; all suites completed successfully.
+
+## Task: Pharmacy sale voids and returns
+
+- **Status:** DONE
+- **Files changed:**
+  - `careplus-backend/prisma/schema.prisma`
+  - `careplus-backend/prisma/migrations/20261008210000_pharmacy_sale_returns_voids/migration.sql`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.validators.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.routes.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/src/modules/billing/billing.service.ts`
+  - `careplus-backend/tests/integration/pharmacy-sale-adjustments.database.test.ts`
+  - `careplus-backend/tests/integration/route-access-contract.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/pages/billing/InvoiceDetail.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyBillingPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacySaleAdjustmentsPage.tsx`
+  - `careplus-frontend/src/dashboard/DashboardApp.tsx`
+  - `careplus-frontend/src/dashboard/nav.ts`
+  - `careplus-frontend/src/dashboard/types.ts`
+  - `careplus-frontend/src/dashboard/store/DashboardContext.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyDashboard.tsx`
+  - `careplus-frontend/src/dashboard/components/StatusBadge.tsx`
+  - `careplus-frontend/src/index.css`
+  - `careplus-frontend/tests/e2e/pharmacy-sale-adjustments.spec.ts`
+- **Assumptions made:**
+  - The existing `ADMIN` and `PHARMACIST` roles represent Admin and pharmacy-manager authority; both are required server-side for pharmacy-specific sale adjustments.
+  - Voiding a pharmacy sale after partial returns is supported. It restores only quantities not already returned to stock, preventing double restoration; quantities returned as damaged/expired remain excluded from stock.
+  - Returns preserve the original invoice and record a calculated PKR refund value. The existing payment model has no outbound-refund/disbursement workflow, so the adjustment records the refund value but does not initiate a cash/card payout.
+  - Expired batches cannot be restocked by returns. A no-restock return is still recorded as a RETURN movement with the reason explicitly marked not restocked.
+  - Pharmacy invoices must use the pharmacy void endpoint; the generic billing void endpoint now rejects pharmacy invoices to prevent stock bypass.
+- **Test results:**
+  - Prisma schema validation and Prisma Client generation: passed.
+  - Migration `20261008210000_pharmacy_sale_returns_voids` applied successfully to the shared test database.
+  - Backend build (`npm run build`): passed.
+  - Full backend Jest suite (`npm test -- --runInBand --forceExit`): **34 suites passed, 316 tests passed, 0 failed**. Jest still reports one Redis `TCPWRAP` handle; `--forceExit` allows the completed suite to exit successfully.
+  - Focused pharmacy adjustment integration tests: **1 suite passed, 3 tests passed, 0 failed**. Coverage includes repeated void, exact one-time stock restoration, over-return rejection, restock-off behavior, and void-after-return stock handling.
+  - Frontend production build (`npm run build`): passed; Vite reports the >500 kB chunk-size warning.
+  - Pharmacy sale adjustments E2E (`npx playwright test tests/e2e/pharmacy-sale-adjustments.spec.ts`): **1 passed, 0 failed**.
+- **Unresolved problems:** Actual refund disbursement is not supported by the existing payment model; the return record persists the calculated refund value for settlement. The existing Redis handle warning remains.
+
+## Task: Pharmacy invoices and print layouts
+
+- **Status:** DONE
+- **Files changed:**
+  - `careplus-backend/src/modules/pharmacy/pharmacy.validators.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.routes.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/tests/integration/pharmacy-sale-adjustments.database.test.ts`
+  - `careplus-backend/tests/integration/route-access-contract.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyInvoicesPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyPrintDocuments.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyBillingPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyDashboard.tsx`
+  - `careplus-frontend/src/dashboard/DashboardApp.tsx`
+  - `careplus-frontend/src/dashboard/nav.ts`
+  - `careplus-frontend/src/index.css`
+  - `careplus-frontend/tests/e2e/pharmacy-invoices.spec.ts`
+  - `PHARMACY_PROGRESS.md`
+- **Migrations:** None; this task uses existing invoice, cashier, batch, and stock movement data and adds no schema fields.
+- **Assumptions made:**
+  - Invoice search covers invoice number, walk-in customer name, and linked patient name, phone, or MR number; the date range uses existing Pakistan-local pharmacy day boundaries.
+  - The existing `ADMIN` and `PHARMACIST` roles can view and manage pharmacy invoice actions; both are enforced server-side.
+  - Dispensed-by names come from the invoice's original stock OUT movements. Printed cashier identity is the recorded sale cashier relation, not a UI fallback.
+  - Return remains wired through the existing pharmacy invoice action route; the new invoices detail drawer offers that action without duplicating return logic.
+- **Test results:**
+  - Backend build (`npm run build`): passed.
+  - Focused invoice/RBAC integration tests: **2 suites passed, 124 tests passed, 0 failed**.
+  - Full backend Jest suite (`npm test -- --forceExit`): **34 suites passed, 317 tests passed, 0 failed**. The existing Redis test-process handle requires `--forceExit`.
+  - Frontend production build (`npm run build`): passed.
+  - Pharmacy invoices E2E (`npm run e2e -- tests/e2e/pharmacy-invoices.spec.ts`): **2 passed, 0 failed**; covers list filters, details, cashier identity, and thermal layout selection/reprint rendering.
+- **Unresolved problems:** None specific to this task. The pre-existing Redis Jest handle warning remains.
+
+## Task: Backend-driven Pharmacy Reports
+
+- **Status:** DONE
+- **Files changed:**
+  - `careplus-backend/src/modules/pharmacy/pharmacy.validators.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.routes.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/tests/integration/pharmacy-sale-adjustments.database.test.ts`
+  - `careplus-backend/tests/integration/route-access-contract.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyReportsPage.tsx`
+  - `careplus-frontend/src/dashboard/DashboardApp.tsx`
+  - `careplus-frontend/src/dashboard/nav.ts`
+  - `careplus-frontend/tests/e2e/pharmacy-reports.spec.ts`
+  - `PHARMACY_PROGRESS.md`
+- **Migrations:** None; report data uses existing sales, returns, medicine category, batch purchase price, and cashier records.
+- **Assumptions made:**
+  - Week means Monday through the current day, month means the first day of the current month through today, and All removes the sales date restriction. The custom range is inclusive and requires both dates.
+  - Report date boundaries use Asia/Karachi. Inventory/expiry sections show current stock; sales-derived sections use the selected sales period. Returns are counted on their adjustment date.
+  - Sale revenue and net revenue use recorded sale totals less return refund totals. Gross profit is shown because batch purchase cost exists; it accounts for discounts, refunds, and restocked return cost. Void invoices are excluded from sales totals.
+  - Each section is independently paginated by the backend. CSV export fetches all pages for each section and uses the existing CSV quoting helper.
+- **Test results:**
+  - Backend build (`npm run build`): passed.
+  - Full backend Jest suite (`npm test -- --forceExit`): **34 suites passed, 319 tests passed, 0 failed**; includes regression coverage proving an out-of-range sale is excluded, invalid custom range rejection, and Pharmacy Reports RBAC.
+  - Frontend production build (`npm run build`): passed.
+  - Pharmacy Reports E2E (`npm run e2e -- tests/e2e/pharmacy-reports.spec.ts`): **1 passed, 0 failed**; covers period and custom date filters, backend-driven data rendering, profit metric, and CSV escaping of commas, quotes, and newlines.
+- **Unresolved problems:** None specific to this task. The existing Redis Jest handle still requires `--forceExit`.
+
+## Task: Pharmacy overview cards and sections
+
+- **Status:** DONE
+- **Files changed:**
+  - `careplus-backend/src/modules/pharmacy/pharmacy.routes.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/tests/integration/pharmacy-sale-adjustments.database.test.ts`
+  - `careplus-backend/tests/integration/route-access-contract.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyDashboard.tsx`
+  - `careplus-frontend/src/dashboard/components/Header.tsx`
+  - `careplus-frontend/tests/e2e/pharmacy-overview.spec.ts`
+  - `PHARMACY_PROGRESS.md`
+- **Migrations:** None; overview metrics use existing sales, returns, batch, medicine, and cashier data.
+- **Assumptions made:**
+  - “Today” is calculated using Asia/Karachi date boundaries. Today’s return totals reduce today’s sales only when the original sale was also made today.
+  - Low-stock and expired counts are batch counts. Expired stock means active batches with remaining quantity and an expiry date on or before the current Karachi date.
+  - Inventory cost and selling values include positive-stock, non-expired batches only. Recent sales excludes voided invoices.
+  - Khata remains disabled in Quick Actions until its page/route is implemented.
+  - Pharmacy pages use the global header’s medicine-catalog search; selecting a result opens inventory filtered by that medicine.
+- **Test results:**
+  - Backend build (`npm run build`): passed.
+  - Full backend Jest suite (`npm test -- --runInBand --detectOpenHandles --forceExit`): **34 suites passed, 321 tests passed, 0 failed**; includes overview sale/return/void lifecycle and RBAC coverage.
+  - Frontend production build (`npm run build`): passed.
+  - Pharmacy overview E2E (`npx playwright test tests/e2e/pharmacy-overview.spec.ts`): **2 passed, 0 failed**; covers overview metrics, mutation-triggered refresh, and header medicine search/navigation.
+  - `git diff --check`: passed; Git emitted only existing LF-to-CRLF conversion warnings.
+- **Unresolved problems:** None specific to this task. The existing Redis Jest handle still requires `--forceExit`.
+
+## Task: Pharmacy Khata integration
+
+- **Status:** DONE
+- **Files changed:**
+  - `careplus-backend/prisma/schema.prisma`
+  - `careplus-backend/prisma/migrations/20261008220000_pharmacy_khata/migration.sql`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.validators.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.routes.ts`
+  - `careplus-backend/tests/integration/pharmacy-khata.database.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyBillingPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyKhataPage.tsx`
+  - `careplus-frontend/src/dashboard/DashboardApp.tsx`
+  - `careplus-frontend/src/dashboard/nav.ts`
+  - `careplus-frontend/src/dashboard/pages/patients/PatientProfile.tsx`
+  - `careplus-frontend/tests/e2e/pharmacy-billing.spec.ts`
+  - `careplus-frontend/tests/e2e/pharmacy-khata.spec.ts`
+- **Migrations:** One new migration adds the pharmacy ledger account and entry tables with `SALE_ON_CREDIT`, `PAYMENT_RECEIVED`, `PAYMENT_MADE`, `ADJUSTMENT`, and `CREDIT` payment enum support.
+- **Assumptions made:**
+  - The pharmacy uses a dedicated khata ledger rather than a second patient balance field, preserving a single source of truth and avoiding duplicated patient state.
+  - Receivables are tied to customer accounts and linked Patients when available; payable accounts are flexible party-based records.
+  - Partial credit sales are allowed, with the remainder recorded as a receivable and settled through ledger payments.
+  - Payment receipt printing is handled as lightweight printable content through the existing print flows.
+- **Test results:**
+  - Backend build (`npm run build`): passed.
+  - Full backend Jest suite (`npm test -- --runInBand --forceExit`): **35 suites passed, 328 tests passed, 0 failed**.
+  - Frontend production build (`npm run build`): passed.
+  - Targeted E2E coverage (`npx playwright test tests/e2e/pharmacy-billing.spec.ts tests/e2e/pharmacy-khata.spec.ts`): **2 specs passed, 0 failed** after the final receipt and locator fixes.
+- **Unresolved problems:** None for this task. The existing Redis handle warning remains a test-environment quirk that does not fail the suite when using `--forceExit`.
+
+## Task: Batch-aware pharmacy inventory
+
+- **Status:** DONE
+- **Files changed:**
+  - `careplus-backend/prisma/schema.prisma`
+  - `careplus-backend/prisma/migrations/20261009000000_pharmacy_batch_aware_inventory/migration.sql`
+  - `careplus-backend/src/common/middleware/validate.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.validators.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.routes.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/tests/integration/pharmacy-batch-inventory.database.test.ts`
+  - `careplus-backend/tests/integration/route-access-contract.test.ts`
+  - `careplus-backend/tests/unit/pharmacy-billing-inputs.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyDashboard.tsx`
+  - `careplus-frontend/tests/e2e/pharmacy-inventory-batches.spec.ts`
+  - `PHARMACY_PROGRESS.md`
+- **Migration:** Adds medicine unit type and manufacturer, and supplier invoice reference on stock movements. Existing data was already stored in `MedicineBatch` since the initial Prisma schema, so the migration retains existing batch quantities and does not duplicate or rewrite inventory.
+- **Assumptions made:**
+  - Total on-hand inventory counts all active batch quantities, including expired stock, while separately computing sellable stock from non-expired batches. Expired batches remain visible and red until written off.
+  - A stock-in with a matching medicine and batch number tops up that batch; expiry must match. The receipt cost/selling prices and supplier are updated to the latest received values, and the supplier is optionally resolved or created by name.
+  - A newly added medicine can include an opening batch in the same transaction. Expiry is entered as DD/MM/YYYY in the form and converted to an ISO date for the API.
+  - Existing batch expiry dates are date-only; a batch is considered expired after its expiry calendar date in Asia/Karachi. The existing FEFO selection remains earliest-expiry-first and excludes expired/inactive stock.
+  - Archive is a soft delete and is rejected whenever any batch has stock movement history.
+- **Test results:**
+  - Prisma schema validation and Client generation: passed.
+  - Migration deployed successfully to both `careplus` and `careplus_test`.
+  - Backend build (`npm run build`): passed.
+  - Full backend Jest suite (`npm test -- --runInBand --forceExit`): **36 suites passed, 332 tests passed, 0 failed**; includes batch stock-in/top-up, invoice references, expired write-off and FEFO exclusion, archive restrictions, input validation, and RBAC.
+  - Pharmacy inventory E2E (`npm run e2e -- tests/e2e/pharmacy-inventory-batches.spec.ts`): **1 passed, 0 failed**; covers expandable batch details, expired write-off, and new batch stock-in fields.
+  - Frontend production build (`npm run build`): passed.
+  - `git diff --check`: passed; Git emitted only existing LF-to-CRLF conversion warnings.
+- **Unresolved problems:** Jest reports the existing Redis `TCPWRAP` open handle after the full suite; all 332 tests pass and `--forceExit` completes successfully.
+
+## Task: Pharmacy Settings
+
+- **Status:** DONE
+- **Files changed:**
+  - `careplus-backend/prisma/schema.prisma`
+  - `careplus-backend/prisma/migrations/20261010000000_pharmacy_settings/migration.sql`
+  - `careplus-backend/src/config/logger.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.validators.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.routes.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/tests/integration/pharmacy-settings.database.test.ts`
+  - `careplus-backend/tests/integration/route-access-contract.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/DashboardApp.tsx`
+  - `careplus-frontend/src/dashboard/nav.ts`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacySettingsPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyBillingPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyDashboard.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyInvoicesPage.tsx`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyPrintDocuments.tsx`
+  - `careplus-frontend/tests/e2e/pharmacy-settings.spec.ts`
+- **Migration:** Creates the pharmacy security credential table for the hashed Admin PIN and adds a pharmacy-loss notification type. Deployed successfully to both `careplus` and `careplus_test`.
+- **Assumptions made:**
+  - Initial Admin PIN setup does not require a current PIN; every later PIN change requires the current PIN. PINs are 4–12 digits, Argon2-hashed, never returned, and redacted from request logs.
+  - Pharmacy name, address, phone, currency, receipt format, discount ceiling, loss threshold, and low-stock default are stored through the existing settings table and each changed value writes its own audit entry. The existing cashier discount setting remains synchronized for current billing checks.
+  - The loss alert threshold is a PKR total invoice cost shortfall; 0 disables those notifications. A qualifying sale notifies active Admins.
+  - The default low-stock level applies only when new batches are created without an explicit reorder level; existing batches keep their configured levels.
+  - Pharmacy logo files accept PNG, JPEG, or SVG up to 2 MB. Last-backup time refers to the latest successful record from the existing backup system; backup creation remains Admin-only and uses its existing endpoint.
+  - Existing Admin login approval for above-limit discounts remains available alongside PIN approval; above-limit sales still require a reason.
+- **Test results:**
+  - Prisma schema validation and Client generation: passed.
+  - Backend build (`npm run build`): passed.
+  - Targeted settings integration tests: **2 passed, 0 failed**; includes RBAC, audit entries, PIN hashing/current-PIN enforcement, safe API output, and PIN-approved discount attribution.
+  - Full backend Jest suite (`npm test -- --forceExit`): **37 suites passed, 338 tests passed, 0 failed**.
+  - Pharmacy Settings E2E (`npm run e2e -- tests/e2e/pharmacy-settings.spec.ts`): **1 passed, 0 failed**; covers setting updates, PIN setup, logo upload, and shared backup creation.
+  - Frontend production build (`npm run build`): passed.
+  - `git diff --check`: passed; Git emitted only existing LF-to-CRLF conversion warnings.
+- **Unresolved problems:** None for this task. Jest still reports the pre-existing Redis `TCPWRAP` open handle without `--forceExit`; the full suite passes and exits successfully with the repository’s existing workaround.
+
+## Task: Fix Pharmacy manual-testing issues
+
+- **Status:** DONE
+- **Files/migration changed:**
+  - `PHARMACY_PROGRESS.md`
+  - `careplus-backend/prisma/schema.prisma`
+  - `careplus-backend/prisma/migrations/20261011000000_pharmacy_prescription_dispensed/migration.sql`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.validators.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.routes.ts`
+  - `careplus-backend/src/modules/pharmacy/pharmacy.service.ts`
+  - `careplus-backend/src/modules/prescriptions/prescriptions.validators.ts`
+  - `careplus-backend/src/modules/prescriptions/prescriptions.service.ts`
+  - `careplus-backend/scripts/seed-demo-presentation.ts`
+  - `careplus-backend/tests/integration/pharmacy-prescription-dispense.database.test.ts`
+  - `careplus-backend/tests/integration/pharmacy-sale-adjustments.database.test.ts`
+  - `careplus-frontend/src/lib/api.ts`
+  - `careplus-frontend/src/dashboard/pages/pharmacy/PharmacyDashboard.tsx`
+  - `careplus-frontend/src/dashboard/components/StatusBadge.tsx`
+  - `careplus-frontend/tests/e2e/pharmacy-prescription-dispense.spec.ts`
+- **Migration:** Added `DISPENSED` to `PrescriptionStatus`; applied successfully to both local `careplus` and `careplus_test` databases.
+- **Assumptions made:**
+  - Prescription items do not store a prescribed quantity, so a pharmacist enters the quantity per catalog line; FEFO still allocates exact batches on the server.
+  - Prescription dispensing is recorded as a cash-paid sale because the existing dispense action has no payment selector. Manual/non-catalog items remain flagged for pharmacist review and are not auto-deducted.
+  - The legacy item dispense route remains compatible for prescriptions with one catalog medicine and now creates an invoice; prescriptions with multiple catalog medicines must use the prescription-level endpoint. Both paths reject repeat dispensing after the prescription is marked `DISPENSED`.
+  - Inventory Value already used purchase/cost price in the backend; added a regression assertion verifying that returning one unit changes cost value by its cost price and selling value by its selling price.
+  - The literal placeholder records `sad`, `djsj`, and `check 2` were not present in seed/demo fixtures. `djsj` only appeared in the existing placeholder-cleanup utility; demo presentation patient names were made realistic while preserving their explicit test-data marking.
+- **Test results:**
+  - Prisma Client generation: passed.
+  - Migration deployment: passed on both databases.
+  - Backend build (`npm run build`): passed.
+  - Focused integration tests: **2 suites passed, 6 tests passed, 0 failed**; includes dispense lifecycle and inventory valuation regression.
+  - Final prescription/invoice batch-detail integration rerun: **1 suite passed, 1 test passed, 0 failed**.
+  - Final full backend suite (`npm test -- --forceExit`): **38 suites passed, 339 tests passed, 0 failed**.
+  - Pharmacy prescription dispense E2E (`npm run e2e -- tests/e2e/pharmacy-prescription-dispense.spec.ts`): **1 passed, 0 failed**.
+  - Frontend production build (`npm run build`): passed.
+  - `git diff --check`: passed.
+- **Unresolved problems:** No task-specific issues. Jest continues to report the existing Redis `TCPWRAP` open handle; the suite exits successfully with the repository's `--forceExit` workaround.

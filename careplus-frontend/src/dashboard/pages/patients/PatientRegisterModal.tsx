@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
 import type { BloodGroup, Gender, Patient } from "@/dashboard/types"
-import { calcAge, isValidCNIC, isValidPhone } from "@/dashboard/lib/format"
+import { formatBloodGroup, formatPakistaniCNIC, formatPakistaniPhone, isValidCNIC, isValidPhone, normalizePakistaniPhone, toApiBloodGroup } from "@/dashboard/lib/format"
 import { useToast } from "@/hooks/use-toast"
 import { api, toPatient, type ApiError } from "@/lib/api"
 
@@ -17,8 +17,8 @@ const BLOOD_GROUPS: BloodGroup[] = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "
 
 interface FormState {
   name: string
-  dob: string
-  gender: Gender
+  age: string
+  gender: Gender | ""
   phone: string
   email: string
   address: string
@@ -30,7 +30,7 @@ interface FormState {
 }
 
 const EMPTY: FormState = {
-  name: "", dob: "", gender: "Male", phone: "", email: "", address: "",
+  name: "", age: "", gender: "", phone: "", email: "", address: "",
   cnic: "", bloodGroup: "O+", allergies: "", emergencyContact: "", notes: "",
 }
 
@@ -40,30 +40,81 @@ export function PatientRegisterModal({ open, onClose }: { open: boolean; onClose
   const navigate = useNavigate()
   const [form, setForm] = React.useState<FormState>(EMPTY)
   const [errors, setErrors] = React.useState<Partial<Record<keyof FormState, string>>>({})
+  const [touched, setTouched] = React.useState<Partial<Record<"phone" | "emergencyContact" | "cnic", boolean>>>({})
   const [duplicate, setDuplicate] = React.useState<Patient | null>(null)
+  const [duplicateCnic, setDuplicateCnic] = React.useState<Patient | null>(null)
   const [saving, setSaving] = React.useState(false)
 
   React.useEffect(() => {
-    if (open) { setForm(EMPTY); setErrors({}); setDuplicate(null) }
+    if (open) { setForm(EMPTY); setErrors({}); setTouched({}); setDuplicate(null) }
   }, [open])
+
+  function phoneFieldError(key: "phone" | "emergencyContact", value: string) {
+    if (key === "emergencyContact" && !value.trim()) return undefined
+    return isValidPhone(value) ? undefined : "Enter a valid Pakistani phone, e.g. 0301-2345678"
+  }
+
+  function updatePhoneError(key: "phone" | "emergencyContact", value: string) {
+    setErrors((current) => {
+      const next = { ...current }
+      const error = phoneFieldError(key, value)
+      if (error) next[key] = error
+      else delete next[key]
+      return next
+    })
+  }
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }))
     if (key === "phone") {
-      const existing = patients.find((p) => p.phone === value)
+      const existing = patients.find((p) => normalizePakistaniPhone(p.phone) === normalizePakistaniPhone(String(value)))
       setDuplicate(existing ?? null)
+      if (touched.phone) updatePhoneError("phone", String(value))
     }
+    if (key === "cnic") {
+      const cnic = String(value)
+      setDuplicateCnic(cnic ? patients.find((p) => p.cnic?.replace(/\D/g, "") === cnic.replace(/\D/g, "")) ?? null : null)
+      if (touched.cnic) {
+        setErrors((current) => {
+          const next = { ...current }
+          if (isValidCNIC(cnic)) delete next.cnic
+          else next.cnic = "Enter a valid 13-digit CNIC"
+          return next
+        })
+      }
+    }
+    if (key === "emergencyContact" && touched.emergencyContact) updatePhoneError("emergencyContact", String(value))
   }
 
   function validate(): boolean {
+    setTouched((current) => ({ ...current, phone: true, emergencyContact: true, cnic: true }))
     const next: Partial<Record<keyof FormState, string>> = {}
     if (!form.name.trim()) next.name = "Full name is required"
-    if (!form.dob) next.dob = "Date of birth is required"
-    if (!isValidPhone(form.phone)) next.phone = "Enter a valid phone, e.g. 0301-2345678"
-    if (!isValidCNIC(form.cnic)) next.cnic = "Format: 34101-1234567-1"
-    if (!form.emergencyContact.trim()) next.emergencyContact = "Emergency contact is required"
+    const ageValue = Number(form.age)
+    if (!form.age || Number.isNaN(ageValue) || !Number.isInteger(ageValue) || ageValue < 0 || ageValue > 120) next.age = "Age must be a whole number between 0 and 120"
+    if (!form.gender) next.gender = "Select a gender"
+    const phoneError = phoneFieldError("phone", form.phone)
+    if (phoneError) next.phone = phoneError
+    if (!isValidCNIC(form.cnic)) next.cnic = "Enter a valid 13-digit CNIC"
+    const emergencyContactError = phoneFieldError("emergencyContact", form.emergencyContact)
+    if (emergencyContactError) next.emergencyContact = emergencyContactError
     setErrors(next)
     return Object.keys(next).length === 0
+  }
+
+  function handlePhoneBlur(key: "phone" | "emergencyContact", value: string) {
+    setTouched((current) => ({ ...current, [key]: true }))
+    updatePhoneError(key, value)
+  }
+
+  function handleCnicBlur(value: string) {
+    setTouched((current) => ({ ...current, cnic: true }))
+    setErrors((current) => {
+      const next = { ...current }
+      if (isValidCNIC(value)) delete next.cnic
+      else next.cnic = "Enter a valid 13-digit CNIC"
+      return next
+    })
   }
 
   async function handleSave(bookAppointment: boolean) {
@@ -74,15 +125,15 @@ export function PatientRegisterModal({ open, onClose }: { open: boolean; onClose
       const patient = await api.createPatient({
         firstName,
         lastName: lastParts.join(" ") || firstName,
-        dateOfBirth: form.dob,
+        age: Number(form.age),
         gender: form.gender.toUpperCase(),
-        phone: form.phone.trim(),
+        phone: normalizePakistaniPhone(form.phone),
         email: form.email.trim() || undefined,
-        address: form.address.trim() || undefined,
-        cnic: form.cnic.trim() || undefined,
-        bloodGroup: form.bloodGroup.replace("+", "_POS").replace("-", "_NEG"),
+        address: form.address.trim() && form.address.trim().toLowerCase() !== "none" ? form.address.trim() : undefined,
+        cnic: form.cnic.trim() ? formatPakistaniCNIC(form.cnic) : undefined,
+        bloodGroup: toApiBloodGroup(form.bloodGroup),
         allergies: form.allergies.split(",").map((a) => a.trim()).filter(Boolean),
-        emergencyContactPhone: form.emergencyContact.trim(),
+        emergencyContactPhone: form.emergencyContact.trim() || undefined,
         notes: form.notes.trim() || undefined,
       })
       const mapped = toPatient(patient)
@@ -102,34 +153,34 @@ export function PatientRegisterModal({ open, onClose }: { open: boolean; onClose
     <Modal open={open} onClose={onClose} title="Register New Patient" description="MR number is generated automatically on save." size="lg">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
-          <Label htmlFor="reg-name">Full Name</Label>
-          <Input id="reg-name" value={form.name} onChange={(e) => set("name", e.target.value)} error={!!errors.name} placeholder="e.g. Fatima Zahra" />
+          <Label htmlFor="patient_full_name">Full Name</Label>
+          <Input id="patient_full_name" name="patient_full_name" autoComplete="off" value={form.name} onChange={(e) => set("name", e.target.value)} error={!!errors.name} placeholder="e.g. Fatima Zahra" />
           {errors.name && <p className="mt-1 text-xs font-medium text-[var(--cp-critical)]">{errors.name}</p>}
         </div>
 
         <div>
-          <Label htmlFor="reg-dob">Date of Birth</Label>
-          <Input id="reg-dob" type="date" value={form.dob} onChange={(e) => set("dob", e.target.value)} error={!!errors.dob} />
-          {errors.dob && <p className="mt-1 text-xs font-medium text-[var(--cp-critical)]">{errors.dob}</p>}
-          {form.dob && <p className="mt-1 text-xs text-[var(--cp-ink-soft)]">Age: {calcAge(form.dob)} years</p>}
+          <Label htmlFor="reg-age">Age</Label>
+          <Input id="reg-age" type="number" min={0} max={120} step={1} value={form.age} onChange={(e) => set("age", e.target.value)} error={!!errors.age} placeholder="e.g. 32" />
+          {errors.age && <p className="mt-1 text-xs font-medium text-[var(--cp-critical)]">{errors.age}</p>}
         </div>
 
         <div>
           <Label htmlFor="reg-gender">Gender</Label>
           <Select id="reg-gender" value={form.gender} onChange={(e) => set("gender", e.target.value as Gender)}>
-            <option>Male</option><option>Female</option><option>Other</option>
+            <option value="">Select gender</option><option>Male</option><option>Female</option><option>Other</option>
           </Select>
+          {errors.gender && <p className="mt-1 text-xs font-medium text-[var(--cp-critical)]">{errors.gender}</p>}
         </div>
 
         <div>
-          <Label htmlFor="reg-phone">Phone</Label>
-          <Input id="reg-phone" value={form.phone} onChange={(e) => set("phone", e.target.value)} error={!!errors.phone} placeholder="0301-2345678" />
+          <Label htmlFor="patient_phone">Phone</Label>
+          <Input id="patient_phone" name="patient_phone" type="tel" inputMode="numeric" autoComplete="off" value={form.phone} onChange={(e) => set("phone", formatPakistaniPhone(e.target.value))} onBlur={(e) => handlePhoneBlur("phone", e.target.value)} error={!!errors.phone} placeholder="0301-2345678" />
           {errors.phone && <p className="mt-1 text-xs font-medium text-[var(--cp-critical)]">{errors.phone}</p>}
         </div>
 
         <div>
-          <Label htmlFor="reg-email">Email (optional)</Label>
-          <Input id="reg-email" type="email" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="name@example.com" />
+          <Label htmlFor="patient_email">Email (optional)</Label>
+          <Input id="patient_email" name="patient_email" type="email" autoComplete="off" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="name@example.com" />
         </div>
 
         {duplicate && (
@@ -149,38 +200,55 @@ export function PatientRegisterModal({ open, onClose }: { open: boolean; onClose
           </div>
         )}
 
+        {duplicateCnic && (
+          <div className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-[var(--cp-warning)] bg-[var(--cp-warning-light)] p-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--cp-warning)]" />
+            <div className="flex-1 text-sm">
+              <p className="font-semibold text-[var(--cp-ink)]">A patient with this CNIC already exists</p>
+              <p className="text-[var(--cp-ink-soft)]">{duplicateCnic.name} · {duplicateCnic.mrNumber}</p>
+              <button
+                type="button"
+                onClick={() => { onClose(); navigate(`/dashboard/patients/${duplicateCnic.mrNumber}`) }}
+                className="mt-1 text-xs font-semibold text-[var(--cp-primary)] underline underline-offset-2"
+              >
+                View existing patient
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="sm:col-span-2">
-          <Label htmlFor="reg-address">Address</Label>
-          <Input id="reg-address" value={form.address} onChange={(e) => set("address", e.target.value)} placeholder="House, Street, Area, City" />
+          <Label htmlFor="patient_address">Address</Label>
+          <Input id="patient_address" name="patient_address" autoComplete="off" value={form.address} onChange={(e) => set("address", e.target.value)} placeholder="House, Street, Area, City" />
         </div>
 
         <div>
-          <Label htmlFor="reg-cnic">CNIC (optional)</Label>
-          <Input id="reg-cnic" value={form.cnic} onChange={(e) => set("cnic", e.target.value)} error={!!errors.cnic} placeholder="34101-1234567-1" />
+          <Label htmlFor="patient_cnic">CNIC (optional)</Label>
+          <Input id="patient_cnic" name="patient_cnic" type="tel" inputMode="numeric" autoComplete="off" value={form.cnic} onChange={(e) => set("cnic", formatPakistaniCNIC(e.target.value))} onBlur={(e) => handleCnicBlur(e.target.value)} error={!!errors.cnic} placeholder="13-digit CNIC" />
           {errors.cnic && <p className="mt-1 text-xs font-medium text-[var(--cp-critical)]">{errors.cnic}</p>}
         </div>
 
         <div>
           <Label htmlFor="reg-bg">Blood Group</Label>
           <Select id="reg-bg" value={form.bloodGroup} onChange={(e) => set("bloodGroup", e.target.value as BloodGroup)}>
-            {BLOOD_GROUPS.map((bg) => <option key={bg}>{bg}</option>)}
+            {BLOOD_GROUPS.map((bg) => <option key={bg} value={bg}>{formatBloodGroup(bg)}</option>)}
           </Select>
         </div>
 
         <div>
-          <Label htmlFor="reg-allergies">Allergies (comma separated)</Label>
-          <Input id="reg-allergies" value={form.allergies} onChange={(e) => set("allergies", e.target.value)} placeholder="Penicillin, Latex" />
+          <Label htmlFor="allergies">Allergies (comma separated)</Label>
+          <Input id="allergies" name="allergies" autoComplete="off" value={form.allergies} onChange={(e) => set("allergies", e.target.value)} placeholder="Penicillin, Latex" />
         </div>
 
         <div>
-          <Label htmlFor="reg-emergency">Emergency Contact</Label>
-          <Input id="reg-emergency" value={form.emergencyContact} onChange={(e) => set("emergencyContact", e.target.value)} error={!!errors.emergencyContact} placeholder="0301-9998887" />
+          <Label htmlFor="emergency_contact_phone">Emergency Contact</Label>
+          <Input id="emergency_contact_phone" name="emergency_contact_phone" type="tel" inputMode="numeric" autoComplete="off" value={form.emergencyContact} onChange={(e) => set("emergencyContact", formatPakistaniPhone(e.target.value))} onBlur={(e) => handlePhoneBlur("emergencyContact", e.target.value)} error={!!errors.emergencyContact} placeholder="0301-9998887" />
           {errors.emergencyContact && <p className="mt-1 text-xs font-medium text-[var(--cp-critical)]">{errors.emergencyContact}</p>}
         </div>
 
         <div className="sm:col-span-2">
-          <Label htmlFor="reg-notes">Notes</Label>
-          <Textarea id="reg-notes" value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Any additional information…" />
+          <Label htmlFor="notes">Notes</Label>
+          <Textarea id="notes" name="notes" autoComplete="off" value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Any additional information…" />
         </div>
       </div>
 

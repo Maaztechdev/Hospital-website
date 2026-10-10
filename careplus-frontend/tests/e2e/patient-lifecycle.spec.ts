@@ -30,7 +30,7 @@ test("patient lifecycle runs from registration through clinical, billing, lab, a
   const suffix = Date.now().toString()
 
   const patient = await call(request, "post", "/patients", receptionHeaders, {
-    firstName: "Lifecycle", lastName: `Patient ${suffix}`, dateOfBirth: "1990-01-01", gender: "OTHER", phone: `0300${suffix.slice(-7)}`,
+    firstName: "Lifecycle", lastName: `Patient ${suffix}`, age: 35, gender: "OTHER", phone: `0300${suffix}${Math.floor(Math.random() * 10)}`, force: true,
   })
   expect(patient.mrNumber).toBeTruthy()
 
@@ -45,13 +45,12 @@ test("patient lifecycle runs from registration through clinical, billing, lab, a
   const appointment = await call(request, "post", "/appointments", receptionHeaders, {
     patientId: patient.id, doctorId: selectedDoctor.id, appointmentDate: dateText, timeSlot: slots.availableSlots[0], appointmentType: "NEW_VISIT", source: "WALK_IN",
   })
-  await call(request, "post", `/appointments/${appointment.id}/approve`, doctor.accessToken)
-  await call(request, "post", `/opd-queue/${selectedDoctor.id}/call-next`, receptionHeaders)
+  expect(appointment.status).toBe("CONFIRMED")
   await call(request, "post", `/opd-queue/${appointment.id}/start-consultation`, doctor.accessToken)
 
   const consultation = await call(request, "post", "/consultations", doctor.accessToken, { appointmentId: appointment.id, diagnosis: "Lifecycle diagnosis" })
   const prescription = await call(request, "post", "/prescriptions", doctor.accessToken, {
-    consultationId: consultation.id, items: [{ medicineName: "Lifecycle Medicine", dosage: "1 tablet", route: "Oral", frequency: "Once daily", durationDays: 5 }],
+    consultationId: consultation.id, items: [{ medicineName: "Lifecycle Medicine", isCatalogItem: false, doseAmount: 1, doseUnit: "tablet", route: "Oral", frequencyCode: "OD", durationValue: 5, durationUnit: "days" }],
   })
   await call(request, "post", `/prescriptions/${prescription.id}/sign`, doctor.accessToken)
   await call(request, "post", `/consultations/${consultation.id}/sign`, doctor.accessToken)
@@ -60,7 +59,11 @@ test("patient lifecycle runs from registration through clinical, billing, lab, a
   const labTests = await call(request, "get", "/lab/tests", admin.accessToken)
   const labOrder = await call(request, "post", "/lab/orders", doctor.accessToken, { patientId: patient.id, doctorId: selectedDoctor.id, testId: labTests[0].id, priority: "ROUTINE" })
   await call(request, "patch", `/lab/orders/${labOrder.id}/sample-status`, admin.accessToken, { status: "SAMPLE_COLLECTED" })
-  await call(request, "post", `/lab/orders/${labOrder.id}/results`, admin.accessToken, { resultValue: "Normal", interpretation: "NORMAL" })
+  const labParameters = labTests[0].parameters ?? []
+  const labResult = labParameters.length
+    ? { parameters: labParameters.map((parameter: { id: string; resultType: string }) => ({ parameterId: parameter.id, value: parameter.resultType === "NUMERIC" ? "5.4" : "Observed" })) }
+    : { resultValue: "Normal", interpretation: "NORMAL" as const }
+  await call(request, "post", `/lab/orders/${labOrder.id}/results`, admin.accessToken, labResult)
   await call(request, "post", `/lab/orders/${labOrder.id}/verify`, admin.accessToken)
 
   const invoice = await call(request, "post", "/billing/invoices", admin.accessToken, {
@@ -72,10 +75,14 @@ test("patient lifecycle runs from registration through clinical, billing, lab, a
   const bed = beds.find((item: { status: string }) => item.status === "AVAILABLE")
   expect(bed).toBeTruthy()
   const admission = await call(request, "post", "/wards/admissions", admin.accessToken, {
-    patientId: patient.id, bedId: bed.id, attendingDoctorId: selectedDoctor.id, admissionType: "PLANNED", admissionReason: "Lifecycle observation",
+    patientId: patient.id, bedId: bed.id, attendingDoctorId: selectedDoctor.id, admissionType: "PLANNED", admissionReason: "Lifecycle observation", depositAmount: 1,
   })
   await call(request, "post", "/nursing/vitals", doctor.accessToken, { admissionId: admission.id, temperature: 37, pulse: 72, oxygenSaturation: 98 })
-  await call(request, "post", `/wards/admissions/${admission.id}/discharge`, doctor.accessToken, { dischargeSummary: "Stable and discharged" })
+  await call(request, "post", `/wards/admissions/${admission.id}/discharge`, doctor.accessToken, {
+    diagnosis: "Lifecycle observation",
+    conditionAtDischarge: "Stable",
+    instructions: "Return if symptoms worsen.",
+  })
 
   expect((await call(request, "get", `/patients/${patient.id}`, admin.accessToken)).id).toBe(patient.id)
 })

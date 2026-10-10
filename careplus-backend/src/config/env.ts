@@ -13,6 +13,8 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(16),
   JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),
   JWT_REFRESH_EXPIRES_IN: z.string().default("7d"),
+  SESSION_WARNING_LEAD_MS: z.coerce.number().int().positive().default(120_000),
+  SESSION_INACTIVITY_TIMEOUT_MS: z.coerce.number().int().positive().default(13 * 60_000),
 
   PASSWORD_RESET_SECRET: z.string().min(16),
   PASSWORD_RESET_EXPIRES_IN: z.string().default("30m"),

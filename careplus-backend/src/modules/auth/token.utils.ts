@@ -54,7 +54,13 @@ export async function verifyRefreshToken(token: string): Promise<RefreshTokenPay
 
 /** Rotates a refresh token: revokes the old jti, issues a new token. */
 export async function rotateRefreshToken(oldJti: string, userId: string): Promise<string> {
-  await redis.del(`${REFRESH_PREFIX}${oldJti}`);
+  const consumed = await redis.eval(
+    "local owner = redis.call('GET', KEYS[1]); if owner == ARGV[1] then return redis.call('DEL', KEYS[1]); end; return 0",
+    1,
+    `${REFRESH_PREFIX}${oldJti}`,
+    userId,
+  );
+  if (consumed !== 1) throw new Error("Refresh token has already been used or revoked");
   return signRefreshToken(userId);
 }
 

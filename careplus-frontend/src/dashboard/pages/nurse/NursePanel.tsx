@@ -15,6 +15,7 @@ import { useDashboard } from "@/dashboard/store/DashboardContext"
 import type { Bed } from "@/dashboard/types"
 import { useToast } from "@/hooks/use-toast"
 import { api, type ApiNursingTask, type ApiPatientVitals, type ApiWard } from "@/lib/api"
+import { formatTime } from "@/dashboard/lib/format"
 
 function VitalsForm({ bed, onClose }: { bed: Bed | null; onClose: () => void }) {
   const { toast } = useToast()
@@ -73,6 +74,7 @@ export default function NursePanel() {
   const [taskDescription, setTaskDescription] = React.useState("")
   const [taskAdmissionId, setTaskAdmissionId] = React.useState("")
   const [wards, setWards] = React.useState<ApiWard[]>([])
+  const [currentWard, setCurrentWard] = React.useState("—")
   const [assignmentWardId, setAssignmentWardId] = React.useState("")
   const [shiftDate, setShiftDate] = React.useState(new Date().toISOString().slice(0, 10))
   const [shiftType, setShiftType] = React.useState<"MORNING" | "EVENING" | "NIGHT">("MORNING")
@@ -111,6 +113,20 @@ export default function NursePanel() {
     return () => { active = false }
   }, [beds, assignmentWardId, taskAdmissionId, toast])
 
+  React.useEffect(() => {
+    if (currentUser?.role !== "nurse" || !currentUser.id || wards.length === 0) {
+      setCurrentWard("—")
+      return
+    }
+    let active = true
+    api.listNurseAssignments(undefined, shiftDate).then((assignments) => {
+      if (!active) return
+      const assignment = assignments.find((item) => item.nurseUserId === currentUser.id && item.isActive)
+      setCurrentWard(wards.find((ward) => ward.id === assignment?.wardId)?.wardName ?? "—")
+    }).catch((cause) => { if (active) { setCurrentWard("—"); toast({ title: "Unable to load nurse assignment", description: cause instanceof Error ? cause.message : "Please try again.", variant: "error" }) } })
+    return () => { active = false }
+  }, [currentUser?.id, currentUser?.role, shiftDate, wards])
+
   async function completeTask(task: ApiNursingTask) {
     try {
       const completed = await api.completeNursingTask(task.id)
@@ -132,11 +148,12 @@ export default function NursePanel() {
     if (!currentUser?.id || !assignmentWardId) return
     try {
       await api.createNurseAssignment({ nurseUserId: currentUser.id, wardId: assignmentWardId, shiftDate, shiftType })
+      if (shiftDate === new Date().toISOString().slice(0, 10)) setCurrentWard(wards.find((ward) => ward.id === assignmentWardId)?.wardName ?? "—")
       toast({ title: "Nurse assignment created", variant: "success" })
     } catch (error) { toast({ title: "Assignment failed", description: error instanceof Error ? error.message : "Unable to create assignment.", variant: "error" }) }
   }
 
-  const vitalsChart = vitalsHistory.map((vital) => ({ label: new Date(vital.recordedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), value: vital.oxygenSaturation ?? 0 }))
+  const vitalsChart = vitalsHistory.map((vital) => ({ label: formatTime(vital.recordedAt), value: vital.oxygenSaturation ?? 0 }))
 
   return (
     <div className="flex flex-col gap-4">
@@ -144,14 +161,14 @@ export default function NursePanel() {
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <StatCard label="Assigned Patients" value={occupied.length.toString()} icon={Users} tone="primary" />
-        <StatCard label="Current Ward" value={currentUser?.role === "nurse" ? "All Wards" : "—"} icon={HeartPulse} tone="primary" />
+        <StatCard label="Current Ward" value={currentWard} icon={HeartPulse} tone="primary" />
         <StatCard label="Vitals Due" value={vitalsDue.length.toString()} icon={Activity} tone="warning" />
         <StatCard label="Critical Alerts" value={critical.length.toString()} icon={AlertTriangle} tone="critical" />
         <StatCard label="Pending Tasks" value={tasks.filter((task) => task.status !== "COMPLETED").length.toString()} icon={ListTodo} tone="warning" />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-4">
+        {currentUser?.role === "admin" && <div className="rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-4">
           <p className="mb-3 text-sm font-bold text-[var(--cp-ink)]">Nurse Assignment</p>
           <div className="grid gap-3 sm:grid-cols-3">
             <Select value={assignmentWardId} onChange={(e) => setAssignmentWardId(e.target.value)}><option value="">Select ward</option>{wards.map((ward) => <option key={ward.id} value={ward.id}>{ward.wardName}</option>)}</Select>
@@ -159,7 +176,7 @@ export default function NursePanel() {
             <Select value={shiftType} onChange={(e) => setShiftType(e.target.value as typeof shiftType)}><option value="MORNING">Morning</option><option value="EVENING">Evening</option><option value="NIGHT">Night</option></Select>
           </div>
           <Button className="mt-3" size="sm" onClick={createAssignment}>Assign Nurse</Button>
-        </div>
+        </div>}
         <div className="rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-4">
           <p className="mb-3 text-sm font-bold text-[var(--cp-ink)]">Add Nursing Task</p>
           <div className="flex gap-2"><Select value={taskAdmissionId} onChange={(e) => setTaskAdmissionId(e.target.value)}><option value="">Select patient</option>{occupied.filter((bed) => bed.admissionId).map((bed) => <option key={bed.admissionId} value={bed.admissionId}>{bed.patientName} · {bed.bedNumber}</option>)}</Select><Input value={taskDescription} onChange={(e) => setTaskDescription(e.target.value)} placeholder="Task description" /></div>
@@ -246,7 +263,7 @@ export default function NursePanel() {
               <tbody>
                 {vitalsHistory.map((vital) => (
                   <tr key={vital.id} className="border-b border-[var(--cp-border)] last:border-0">
-                    <td className="px-2 py-2 text-[var(--cp-ink-soft)]">{new Date(vital.recordedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</td>
+                    <td className="px-2 py-2 text-[var(--cp-ink-soft)]">{formatTime(vital.recordedAt)}</td>
                     <td className="cp-tabular px-2 py-2 font-medium text-[var(--cp-ink)]">{vital.oxygenSaturation ?? "—"}%</td>
                     <td className="px-2 py-2">{(vital.oxygenSaturation ?? 100) < 96 ? <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--cp-critical)]"><Flag className="h-3 w-3" /> Low</span> : <span className="text-xs text-[var(--cp-success)]">Normal</span>}</td>
                   </tr>

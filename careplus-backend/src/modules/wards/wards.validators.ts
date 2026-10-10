@@ -64,6 +64,13 @@ export const admitPatientSchema = z.object({
   depositAmount: z.number().int().min(0).max(1_000_000),
   dailyRate: z.number().positive().optional(),
   expectedStayDays: z.number().int().min(1).max(365).optional(),
+  admissionNotes: z.string().trim().max(5000).optional(),
+});
+
+export const recordAdmissionDepositSchema = z.object({
+  amount: z.number().int().positive().max(1_000_000),
+  paymentMethod: z.enum(["CASH", "CARD", "BANK_TRANSFER", "MOBILE_WALLET"]).default("CASH"),
+  notes: z.string().trim().max(500).optional(),
 });
 
 export const transferBedSchema = z.object({
@@ -72,8 +79,14 @@ export const transferBedSchema = z.object({
 });
 
 export const dischargeSchema = z.object({
-  dischargeSummary: z.string().min(1),
-  dischargeNotes: z.string().optional(),
+  diagnosis: z.string().trim().min(1, "Diagnosis is required"),
+  courseInHospital: z.string().trim().optional().default(""),
+  medications: z.array(z.string().trim().min(1)).default([]),
+  conditionAtDischarge: z.string().trim().min(1, "Condition at discharge is required"),
+  followUpDate: z.string().date().optional(),
+  referral: z.string().trim().optional().default(""),
+  instructions: z.string().trim().min(1, "Patient instructions are required"),
+  confirmUnpaidBalance: z.boolean().default(false),
 });
 
 export const idParamSchema = z.object({ id: z.string().uuid() });

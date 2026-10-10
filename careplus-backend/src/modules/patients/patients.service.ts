@@ -7,18 +7,10 @@ import { PageParams } from "@common/utils/pagination";
 import { AccessTokenPayload } from "@common/middleware/authenticate";
 import { assertPatientAccess } from "@common/utils/recordAuthorization";
 
-function calculateAge(dob: Date): number {
-  const today = new Date();
-  let age = today.getFullYear() - dob.getFullYear();
-  const m = today.getMonth() - dob.getMonth();
-  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
-  return age;
-}
-
 interface CreatePatientInput {
   firstName: string;
   lastName: string;
-  dateOfBirth: string;
+  age: number;
   gender: string;
   phone: string;
   email?: string;
@@ -32,10 +24,15 @@ interface CreatePatientInput {
   force?: boolean;
 }
 
+export function canExposePatientBalance(role: string): boolean {
+  return role !== "LAB_TECHNICIAN";
+}
+
 export const patientsService = {
   async list(actor: AccessTokenPayload, params: PageParams & { search?: string }) {
     const where: Prisma.PatientWhereInput = {
       deletedAt: null,
+      NOT: [{ firstName: { contains: "Lifecycle", mode: "insensitive" } }, { lastName: { contains: "Lifecycle", mode: "insensitive" } }],
       ...(params.search
         ? {
             OR: [
@@ -56,11 +53,56 @@ export const patientsService = {
     }
 
     const [items, total] = await Promise.all([
-      prisma.patient.findMany({ where, skip: params.skip, take: params.limit, orderBy: { createdAt: "desc" } }),
+      prisma.patient.findMany({
+        where,
+        skip: params.skip,
+        take: params.limit,
+        orderBy: { createdAt: "desc" },
+      }),
       prisma.patient.count({ where }),
     ]);
 
-    return { items, total };
+    const includeBalances = canExposePatientBalance(actor.role);
+    const invoices = !includeBalances || items.length === 0
+      ? []
+      : await prisma.invoice.findMany({
+        where: { patientId: { in: items.map((patient) => patient.id) }, status: { not: "VOID" } },
+        select: { patientId: true, balanceAmount: true },
+      });
+    const balancesByPatient = new Map<string, number>();
+    for (const invoice of invoices) {
+      if (!invoice.patientId) continue;
+      balancesByPatient.set(invoice.patientId, (balancesByPatient.get(invoice.patientId) ?? 0) + Number(invoice.balanceAmount));
+    }
+
+    const lastVisitRows = items.length > 0
+      ? await prisma.$queryRaw<Array<{ patientId: string; lastVisit: string | null }>>`
+          SELECT p.id AS "patientId",
+            GREATEST(
+              MAX(a.appointment_date),
+              MAX(((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')::date)
+            )::text AS "lastVisit"
+          FROM patients p
+          LEFT JOIN appointments a ON a.patient_id = p.id AND a.status = 'DONE'
+          LEFT JOIN consultations c ON c.patient_id = p.id AND c.prescription_status IN ('SIGNED', 'COMPLETED')
+          WHERE p.id IN (${Prisma.join(items.map((patient) => patient.id))})
+          GROUP BY p.id
+        `
+      : [];
+    const lastVisitByPatient = new Map(lastVisitRows.map((row) => [row.patientId, row.lastVisit]));
+
+    return {
+      items: items.map((patient) => {
+        const lastVisit = lastVisitByPatient.get(patient.id) ?? null;
+        return {
+          ...patient,
+          age: Math.max(0, patient.age ?? 0),
+          lastVisit,
+          ...(includeBalances ? { balance: balancesByPatient.get(patient.id) ?? 0 } : {}),
+        };
+      }),
+      total,
+    };
   },
 
   async getById(actor: AccessTokenPayload, id: string) {
@@ -71,12 +113,17 @@ export const patientsService = {
   },
 
   async create(actorId: string, input: CreatePatientInput, req?: import("express").Request) {
+    const phone = input.phone.replace(/\D/g, "");
+    const formattedPhone = phone.length === 11 && phone.startsWith("03")
+      ? `${phone.slice(0, 4)}-${phone.slice(4)}`
+      : phone;
+    const address = input.address?.trim();
     // Duplicate detection by phone + CNIC
     if (!input.force) {
       const duplicate = await prisma.patient.findFirst({
         where: {
           deletedAt: null,
-          phone: input.phone,
+          phone: { in: [...new Set([phone, formattedPhone])] },
           ...(input.cnic ? { cnic: input.cnic } : {}),
         },
       });
@@ -88,9 +135,6 @@ export const patientsService = {
       }
     }
 
-    const dob = new Date(input.dateOfBirth);
-    const age = calculateAge(dob);
-
     const patient = await prisma.$transaction(async (tx) => {
       const mrNumber = await generateMrNumber(tx);
       return tx.patient.create({
@@ -98,12 +142,11 @@ export const patientsService = {
           mrNumber,
           firstName: input.firstName,
           lastName: input.lastName,
-          dateOfBirth: dob,
-          age,
+          age: input.age,
           gender: input.gender as never,
-          phone: input.phone,
+          phone,
           email: input.email,
-          address: input.address,
+          address: address && address.toLowerCase() !== "none" ? address : undefined,
           cnic: input.cnic,
           bloodGroup: input.bloodGroup as never,
           allergies: input.allergies ?? [],
@@ -124,12 +167,14 @@ export const patientsService = {
     if (!existing) throw new NotFoundError("Patient not found");
 
     const data: Prisma.PatientUpdateInput = { ...input } as never;
-    if (input.dateOfBirth) {
-      const dob = new Date(input.dateOfBirth);
-      data.dateOfBirth = dob;
-      data.age = calculateAge(dob);
+    if (typeof input.phone === "string") data.phone = input.phone.replace(/\D/g, "");
+    if (typeof input.address === "string") {
+      const address = input.address.trim();
+      data.address = address && address.toLowerCase() !== "none" ? address : null;
     }
-
+    if (typeof input.age === "number") {
+      data.age = input.age;
+    }
     const updated = await prisma.patient.update({ where: { id }, data });
 
     await writeAuditLog({

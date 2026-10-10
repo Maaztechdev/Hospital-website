@@ -6,7 +6,7 @@ import type { SemanticTone } from "@/dashboard/components/StatusBadge"
 
 export interface DataTableColumn<T> {
   key: string
-  header: string
+  header: React.ReactNode
   render: (row: T) => React.ReactNode
   sortValue?: (row: T) => string | number
   className?: string
@@ -24,6 +24,9 @@ export function DataTable<T>({
   onRowClick,
   rowTone,
   pageSize = 8,
+  mobileTable = false,
+  highlightRowKey,
+  resetPageKey,
 }: {
   columns: DataTableColumn<T>[]
   rows: T[]
@@ -35,13 +38,16 @@ export function DataTable<T>({
   onRowClick?: (row: T) => void
   rowTone?: (row: T) => SemanticTone
   pageSize?: number
+  mobileTable?: boolean
+  highlightRowKey?: string | null
+  resetPageKey?: string
 }) {
   const { tableDensity } = useDashboard()
   const [sortKey, setSortKey] = React.useState<string | null>(null)
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("asc")
   const [page, setPage] = React.useState(0)
 
-  React.useEffect(() => setPage(0), [rows.length])
+  React.useEffect(() => setPage(0), [rows.length, resetPageKey])
 
   const sorted = React.useMemo(() => {
     if (!sortKey) return rows
@@ -58,6 +64,12 @@ export function DataTable<T>({
     return copy
   }, [rows, sortKey, sortDir, columns])
 
+  React.useEffect(() => {
+    if (!highlightRowKey) return
+    const rowIndex = sorted.findIndex((row) => getRowKey(row) === highlightRowKey)
+    if (rowIndex >= 0) setPage(Math.floor(rowIndex / pageSize))
+  }, [highlightRowKey, sorted, getRowKey, pageSize])
+
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
   const paged = sorted.slice(page * pageSize, page * pageSize + pageSize)
   const cellPad = tableDensity === "compact" ? "px-3 py-2.5" : "px-4 py-4"
@@ -72,13 +84,13 @@ export function DataTable<T>({
     }
   }
 
-  const stripBg: Record<SemanticTone, string> = {
-    success: "before:bg-[var(--cp-success)]",
-    warning: "before:bg-[var(--cp-warning)]",
-    critical: "before:bg-[var(--cp-critical)]",
-    info: "before:bg-[var(--cp-info)]",
-    neutral: "before:bg-[var(--cp-neutral)]",
-    accent: "before:bg-[var(--cp-accent)]",
+  const stripBorder: Record<SemanticTone, string> = {
+    success: "border-l-[var(--cp-success)]",
+    warning: "border-l-[var(--cp-warning)]",
+    critical: "border-l-[var(--cp-critical)]",
+    info: "border-l-[var(--cp-info)]",
+    neutral: "border-l-[var(--cp-neutral)]",
+    accent: "border-l-[var(--cp-accent)]",
   }
 
   if (loading) {
@@ -110,10 +122,10 @@ export function DataTable<T>({
   return (
     <div>
       {/* Desktop / tablet table */}
-      <div className="hidden overflow-x-auto rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] sm:block cp-scrollbar">
+      <div className={cn("overflow-x-auto rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] cp-scrollbar", !mobileTable && "hidden sm:block")}>
         <table className="w-full min-w-[640px] border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-[var(--cp-border)] bg-[var(--cp-surface-warm)]">
+          <thead className="bg-[var(--cp-surface-warm)]">
+            <tr className="border-b border-[var(--cp-border)]">
               {columns.map((col) => (
                 <th
                   key={col.key}
@@ -141,12 +153,11 @@ export function DataTable<T>({
                 className={cn(
                   "relative border-b border-[var(--cp-border)] last:border-0 transition-colors",
                   onRowClick && "cursor-pointer hover:bg-[var(--cp-primary-light)]/40",
-                  rowTone && "before:absolute before:left-0 before:top-0 before:h-full before:w-1",
-                  rowTone && stripBg[rowTone(row)]
+                  highlightRowKey === getRowKey(row) && "bg-[var(--cp-success-light)]/70",
                 )}
               >
-                {columns.map((col) => (
-                  <td key={col.key} className={cn(cellPad, "text-[var(--cp-ink)]", col.className)}>
+                {columns.map((col, index) => (
+                  <td key={col.key} className={cn(cellPad, "text-[var(--cp-ink)]", index === 0 && rowTone && `border-l-4 ${stripBorder[rowTone(row)]}`, col.className)}>
                     {col.render(row)}
                   </td>
                 ))}
@@ -157,7 +168,7 @@ export function DataTable<T>({
       </div>
 
       {/* Mobile stacked cards */}
-      <div className="flex flex-col gap-3 sm:hidden">
+      {!mobileTable && <div className="flex flex-col gap-3 sm:hidden">
         {paged.map((row) => (
           <div
             key={getRowKey(row)}
@@ -167,7 +178,7 @@ export function DataTable<T>({
               onRowClick && "cursor-pointer active:bg-[var(--cp-primary-light)]/40"
             )}
           >
-            {rowTone && <span className={cn("absolute left-0 top-0 h-full w-1", stripBg[rowTone(row)].replace("before:", ""))} />}
+            {rowTone && <span className={cn("absolute left-0 top-0 h-full w-1", stripBorder[rowTone(row)].replace("border-l-", "bg-"))} />}
             <dl className="flex flex-col gap-2">
               {columns.filter((c) => !c.hideOnMobile).map((col) => (
                 <div key={col.key} className="flex items-center justify-between gap-3">
@@ -178,7 +189,7 @@ export function DataTable<T>({
             </dl>
           </div>
         ))}
-      </div>
+      </div>}
 
       {totalPages > 1 && (
         <div className="mt-3 flex items-center justify-between px-1">

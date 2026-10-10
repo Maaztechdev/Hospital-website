@@ -40,25 +40,30 @@ function timestampFilename() {
 
 async function createBackupRecord(actorId: string, req: Request, action = "BACKUP" as const) {
   const filename = timestampFilename();
-  const target = await runDump(filename);
-  const fileStats = await stat(target);
-  const record = await prisma.backup.create({ data: { filename, sizeBytes: BigInt(fileStats.size) } });
-  await writeAuditLog({ userId: actorId, action, module: "backup", entityType: "Backup", entityId: record.id, newValues: { filename, sizeBytes: fileStats.size }, req });
-  return { ...record, sizeBytes: Number(record.sizeBytes) };
+  try {
+    const target = await runDump(filename);
+    const fileStats = await stat(target);
+    const record = await prisma.backup.create({ data: { filename, sizeBytes: BigInt(fileStats.size), status: "SUCCESS" } });
+    await writeAuditLog({ userId: actorId, action, module: "backup", entityType: "Backup", entityId: record.id, newValues: { filename, sizeBytes: fileStats.size, status: record.status }, req });
+    return { ...record, sizeBytes: Number(record.sizeBytes) };
+  } catch (error) {
+    const record = await prisma.backup.create({ data: { filename, sizeBytes: 0, status: "FAILED" } }).catch(() => null);
+    if (record) await writeAuditLog({ userId: actorId, action, module: "backup", entityType: "Backup", entityId: record.id, newValues: { filename, sizeBytes: 0, status: record.status }, req });
+    throw error;
+  }
 }
 
 export const backupService = {
   async list() {
     const records = await prisma.backup.findMany({ orderBy: { createdAt: "desc" } });
-    const existing = await Promise.all(records.map(async (record) => {
+    return Promise.all(records.map(async (record) => {
       try {
         const fileStats = await stat(backupPath(record.filename));
         return { ...record, sizeBytes: Number(fileStats.size) };
       } catch {
-        return null;
+        return { ...record, sizeBytes: Number(record.sizeBytes) };
       }
     }));
-    return existing.filter((record): record is NonNullable<typeof record> => record !== null);
   },
 
   async create(actorId: string, req: Request) {
@@ -68,6 +73,7 @@ export const backupService = {
   async download(id: string) {
     const record = await prisma.backup.findUnique({ where: { id } });
     if (!record) throw new NotFoundError("Backup not found");
+    if (record.status === "FAILED") throw new BadRequestError("This backup was not created successfully");
     const target = backupPath(record.filename);
     try { await stat(target); } catch { throw new NotFoundError("Backup file not found"); }
     return { record, target };
@@ -85,6 +91,7 @@ export const backupService = {
     if (restoreInProgress) throw new BadRequestError("Another restore is already in progress");
     const record = await prisma.backup.findUnique({ where: { id } });
     if (!record) throw new NotFoundError("Backup not found");
+    if (record.status === "FAILED") throw new BadRequestError("This backup was not created successfully");
     const admin = await prisma.user.findUnique({ where: { id: actorId } });
     if (!admin || !(await argon2.verify(admin.passwordHash, password))) throw new UnauthorizedError("Password confirmation failed");
     const target = backupPath(record.filename);

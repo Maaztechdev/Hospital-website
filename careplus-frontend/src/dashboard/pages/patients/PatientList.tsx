@@ -7,12 +7,14 @@ import { DataTable } from "@/dashboard/components/DataTable"
 import { StatusBadge } from "@/dashboard/components/StatusBadge"
 import { Button } from "@/components/ui/button"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
-import { formatCurrency, formatDate } from "@/dashboard/lib/format"
+import { displayPakistaniPhone, formatBloodGroup, formatCurrency, formatDate } from "@/dashboard/lib/format"
 import { useToast } from "@/hooks/use-toast"
 import { PatientRegisterModal } from "@/dashboard/pages/patients/PatientRegisterModal"
+import { can } from "@/dashboard/permissions"
+import type { Patient } from "@/dashboard/types"
 
 export default function PatientList() {
-  const { patients } = useDashboard()
+  const { patients, currentUser } = useDashboard()
   const navigate = useNavigate()
   const { toast } = useToast()
   const [params] = useSearchParams()
@@ -24,7 +26,7 @@ export default function PatientList() {
 
   const filtered = React.useMemo(() => patients.filter((p) => {
     const q = search.trim().toLowerCase()
-    const matchesSearch = !q || p.name.toLowerCase().includes(q) || p.phone.includes(q) || p.mrNumber.toLowerCase().includes(q)
+    const matchesSearch = !q || p.name.toLowerCase().includes(q) || displayPakistaniPhone(p.phone).includes(q) || p.phone.includes(q) || p.mrNumber.toLowerCase().includes(q)
     const matchesGender = gender === "all" || p.gender === gender
     const matchesBG = bloodGroup === "all" || p.bloodGroup === bloodGroup
     const matchesStatus = status === "all" || p.status === status
@@ -37,12 +39,12 @@ export default function PatientList() {
         title="Patients"
         action={
           <>
-            <Button variant="outline" size="sm" onClick={() => toast({ title: "Export started", description: `${filtered.length} patient records exported.`, variant: "success" })}>
+            {currentUser && can(currentUser.role, "patients", "export") && <Button variant="outline" size="sm" onClick={() => toast({ title: "Export started", description: `${filtered.length} patient records exported.`, variant: "success" })}>
               <Download className="h-4 w-4" /> Export
-            </Button>
-            <Button size="sm" onClick={() => setRegisterOpen(true)}>
+            </Button>}
+            {currentUser && can(currentUser.role, "patients", "create") && <Button size="sm" onClick={() => setRegisterOpen(true)}>
               <UserPlus className="h-4 w-4" /> Add Patient
-            </Button>
+            </Button>}
           </>
         }
       />
@@ -65,9 +67,12 @@ export default function PatientList() {
           { key: "name", header: "Patient Name", render: (p) => <span className="font-medium">{p.name}</span>, sortValue: (p) => p.name },
           { key: "age", header: "Age", render: (p) => p.age, sortValue: (p) => p.age, hideOnMobile: true },
           { key: "gender", header: "Gender", render: (p) => p.gender, hideOnMobile: true },
-          { key: "phone", header: "Phone", render: (p) => <span className="cp-tabular">{p.phone}</span> },
+          { key: "bloodGroup", header: "Blood Group", render: (p) => formatBloodGroup(p.bloodGroup), hideOnMobile: true },
+          { key: "phone", header: "Phone", render: (p) => <span className="cp-tabular">{displayPakistaniPhone(p.phone)}</span> },
           { key: "lastVisit", header: "Last Visit", render: (p) => (p.lastVisit ? formatDate(p.lastVisit) : "—"), hideOnMobile: true },
-          { key: "balance", header: "Balance", render: (p) => <span className={p.balance > 0 ? "cp-tabular font-semibold text-[var(--cp-warning)]" : "cp-tabular text-[var(--cp-ink-soft)]"}>{formatCurrency(p.balance)}</span>, sortValue: (p) => p.balance },
+          ...(currentUser?.role === "lab_technician" ? [] : [
+            { key: "balance", header: "Balance", render: (p: Patient) => <span className={p.balance > 0 ? "cp-tabular font-semibold text-[var(--cp-warning)]" : "cp-tabular text-[var(--cp-ink-soft)]"}>{formatCurrency(p.balance)}</span>, sortValue: (p: Patient) => p.balance },
+          ]),
           { key: "status", header: "Status", render: (p) => <StatusBadge status={p.status} /> },
           {
             key: "actions", header: "Actions", render: (p) => (

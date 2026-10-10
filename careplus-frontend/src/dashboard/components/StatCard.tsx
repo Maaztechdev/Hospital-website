@@ -9,10 +9,12 @@ export function StatCard({
   trend,
   tone = "primary",
   onClick,
+  description,
 }: {
   label: string
   value: string
   icon: LucideIcon
+  description?: string
   trend?: { value: string; direction: "up" | "down"; positive?: boolean }
   tone?: "primary" | "warning" | "critical" | "success"
   onClick?: () => void
@@ -29,6 +31,8 @@ export function StatCard({
   return (
     <Comp
       onClick={onClick}
+      title={description}
+      aria-label={description ? `${label}: ${value}. ${description}` : undefined}
       className={cn(
         "flex w-full flex-col gap-3 rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-4 text-left cp-shadow transition-all duration-200",
         onClick && "cursor-pointer hover:cp-shadow-hover hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-primary)]"

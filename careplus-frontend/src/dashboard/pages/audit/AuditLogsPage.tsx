@@ -31,8 +31,8 @@ export default function AuditLogsPage() {
         action: entry.action,
         entity: entry.entityType,
         entityId: entry.entityId,
-        by: entry.user.name,
-        role: entry.user.role,
+        by: entry.user?.name ?? "System",
+        role: entry.user?.role ?? "System",
         date: entry.createdAt,
         details: typeof entry.details === "string" ? entry.details : undefined,
       }))))

@@ -1,3 +1,4 @@
+import { useEffect } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { Users, Hourglass, CheckCircle2, FlaskConical, CalendarClock, Stethoscope } from "lucide-react"
 import { StatCard } from "@/dashboard/components/StatCard"
@@ -6,19 +7,26 @@ import { StatusBadge, toneFor } from "@/dashboard/components/StatusBadge"
 import { DashboardPageHeader } from "@/dashboard/components/Layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
+import { getHospitalDateKey } from "@/dashboard/lib/format"
 
 export default function DoctorDashboard() {
-  const { appointments, labOrders, currentUser } = useDashboard()
+  const { appointments, labOrders, currentUser, refreshAppointments } = useDashboard()
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const prefillMR = params.get("mr")
 
-  const today = new Date().toISOString().slice(0, 10)
-  // In this demo build the logged-in doctor sees all doctors' queues for visibility.
+  useEffect(() => {
+    void refreshAppointments()
+    const interval = window.setInterval(() => { void refreshAppointments() }, 15_000)
+    return () => window.clearInterval(interval)
+  }, [refreshAppointments])
+
+  const today = getHospitalDateKey()
   const todays = appointments.filter((a) => a.date === today)
   const waiting = todays.filter((a) => a.status === "Waiting")
   const completed = todays.filter((a) => a.status === "Done")
   const pendingLabs = labOrders.filter((l) => l.status !== "Verified")
+  const followUpReminders = appointments.filter((appointment) => appointment.type === "Follow-up" && appointment.date >= today).length
 
   return (
     <div className="flex flex-col gap-6">
@@ -29,7 +37,7 @@ export default function DoctorDashboard() {
         <StatCard label="Waiting" value={waiting.length.toString()} icon={Hourglass} tone="warning" />
         <StatCard label="Completed" value={completed.length.toString()} icon={CheckCircle2} tone="success" />
         <StatCard label="Pending Lab Results" value={pendingLabs.length.toString()} icon={FlaskConical} tone="warning" />
-        <StatCard label="Follow-up Reminders" value="4" icon={CalendarClock} tone="primary" />
+        <StatCard label="Follow-up Reminders" value={followUpReminders.toString()} icon={CalendarClock} tone="primary" />
       </div>
 
       {prefillMR && (

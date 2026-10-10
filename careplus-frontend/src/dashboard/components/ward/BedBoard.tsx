@@ -34,12 +34,16 @@ export function BedBoard({
   onSelectBed,
   pickerMode,
   selectedBedId,
+  onMarkAvailable,
+  updatingBedIds,
   showFilters = true,
 }: {
   beds: Bed[]
   onSelectBed?: (bed: Bed) => void
   pickerMode?: boolean
   selectedBedId?: string
+  onMarkAvailable?: (bed: Bed) => void
+  updatingBedIds?: ReadonlySet<string>
   showFilters?: boolean
 }) {
   const [search, setSearch] = React.useState("")
@@ -91,7 +95,14 @@ export function BedBoard({
           </div>
           <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
             {g.beds.map((bed) => (
-              <BedTile key={bed.id} bed={bed} onClick={onSelectBed} selected={selectedBedId === bed.id} />
+              <BedTile
+                key={bed.id}
+                bed={bed}
+                onClick={onSelectBed}
+                selected={selectedBedId === bed.id}
+                onMarkAvailable={onMarkAvailable}
+                markingAvailable={updatingBedIds?.has(bed.id)}
+              />
             ))}
           </div>
         </div>

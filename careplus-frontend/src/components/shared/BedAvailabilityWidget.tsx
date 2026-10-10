@@ -1,4 +1,5 @@
 import { motion, useReducedMotion } from "framer-motion"
+import { useEffect, useState } from "react"
 import { BedDouble } from "lucide-react"
 import { bedAvailability } from "@/data/beds"
 import { Card } from "@/components/ui/card"
@@ -8,6 +9,23 @@ export function BedAvailabilityWidget() {
   const totalBeds = bedAvailability.reduce((s, b) => s + b.total, 0)
   const totalOccupied = bedAvailability.reduce((s, b) => s + b.occupied, 0)
   const totalAvailable = totalBeds - totalOccupied
+  const [availableCount, setAvailableCount] = useState(reduce ? totalAvailable : 0)
+
+  useEffect(() => {
+    if (reduce) {
+      setAvailableCount(totalAvailable)
+      return
+    }
+    const start = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min((now - start) / 1200, 1)
+      setAvailableCount(Math.round((1 - Math.pow(1 - progress, 3)) * totalAvailable))
+      if (progress < 1) frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [reduce, totalAvailable])
 
   return (
     <Card
@@ -36,7 +54,7 @@ export function BedAvailabilityWidget() {
           transition={{ duration: 0.4 }}
           className="font-[var(--font-data)] text-4xl font-bold text-[var(--color-ink)]"
         >
-          {totalAvailable}{" "}
+          {availableCount}{" "}
           <span className="text-base font-medium text-[var(--color-ink-soft)]">
             beds available now
           </span>

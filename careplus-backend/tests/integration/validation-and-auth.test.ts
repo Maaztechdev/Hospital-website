@@ -1,7 +1,12 @@
 import request from "supertest";
 import { createApp } from "../../src/app";
+import { redis } from "@config/redis";
 
 const app = createApp();
+
+afterAll(() => {
+  redis.disconnect();
+});
 
 describe("Integration: validation & auth guards", () => {
   it("POST /api/v1/auth/login with missing password returns 422", async () => {

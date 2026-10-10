@@ -20,6 +20,29 @@ export const patientsController = {
     sendSuccess(res, 200, { data: patient });
   }),
 
+  getProfile: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    sendSuccess(res, 200, { data: await patientsService.getProfile(req.user, req.params.id) });
+  }),
+
+  getClinicalSummary: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    sendSuccess(res, 200, { data: await patientsService.getClinicalSummary(req.user, req.params.id) });
+  }),
+
+  updateClinicalHistory: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    sendSuccess(res, 200, {
+      data: await patientsService.updateClinicalHistory(req.user, req.params.id, req.body, req),
+      message: "Patient clinical history updated",
+    });
+  }),
+
+  printSummary: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    sendSuccess(res, 200, { data: await patientsService.getPrintSummary(req.user, req.params.id) });
+  }),
+
   create: asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
     const patient = await patientsService.create(req.user.sub, req.body, req);

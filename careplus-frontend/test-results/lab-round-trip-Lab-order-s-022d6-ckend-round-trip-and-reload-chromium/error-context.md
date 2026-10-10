@@ -12,25 +12,11 @@
 # Error details
 
 ```
-Test timeout of 30000ms exceeded.
-```
+Error: {"success":false,"data":null,"message":"Database request error","errors":null,"requestId":"359c9368-1f91-4ab6-ba22-13923cc3ac97"}
 
-```
-Error: expect(locator).toBeVisible() failed
+expect(received).toBeTruthy()
 
-Locator: getByText('Verified', { exact: true }).last()
-Expected: visible
-Error: element(s) not found
-
-Call log:
-  - Expect "toBeVisible" with timeout 5000ms
-  - waiting for getByText('Verified', { exact: true }).last()
-  - Protocol error (Runtime.callFunctionOn): Internal server error, session closed.
-
-```
-
-```yaml
-- text: Loading dashboard…
+Received: false
 ```
 
 # Test source
@@ -62,33 +48,40 @@ Call log:
   24 |     headers: { Authorization: `Bearer ${token}` },
   25 |     data: { patientId: patients[0].id, testId: tests[0].id, priority: "ROUTINE", sampleType: "Blood" },
   26 |   })
-  27 |   expect(createResponse.ok()).toBeTruthy()
+> 27 |   expect(createResponse.ok(), await createResponse.text()).toBeTruthy()
+     |                                                            ^ Error: {"success":false,"data":null,"message":"Database request error","errors":null,"requestId":"359c9368-1f91-4ab6-ba22-13923cc3ac97"}
   28 |   const order = (await createResponse.json()).data
-  29 | 
-  30 |   const headers = { Authorization: `Bearer ${token}` }
-  31 |   const statusResponse = await request.patch(`${apiBase}/lab/orders/${order.id}/sample-status`, { headers, data: { status: "SAMPLE_COLLECTED" } })
-  32 |   expect(statusResponse.ok()).toBeTruthy()
-  33 |   const resultResponse = await request.post(`${apiBase}/lab/orders/${order.id}/results`, { headers, data: { resultValue: "5.4", unit: "mmol/L", referenceRange: "3.9 - 5.5", interpretation: "NORMAL", technicianNotes: "Round trip test" } })
-  34 |   expect(resultResponse.ok()).toBeTruthy()
-  35 |   const verifyResponse = await request.post(`${apiBase}/lab/orders/${order.id}/verify`, { headers })
-  36 |   expect(verifyResponse.ok()).toBeTruthy()
-  37 |   const attachmentResponse = await request.post(`${apiBase}/lab/orders/${order.id}/attachments`, { headers, data: { fileUrl: "https://example.com/lab-round-trip.pdf", fileType: "application/pdf" } })
-  38 |   expect(attachmentResponse.ok()).toBeTruthy()
-  39 | 
-  40 |   await page.goto("/dashboard/login")
-  41 |   await page.evaluate((tokens) => {
-  42 |     sessionStorage.setItem("careplus.accessToken", tokens.accessToken)
-  43 |     sessionStorage.setItem("careplus.refreshToken", tokens.refreshToken)
-  44 |   }, session)
-  45 |   await page.goto("/dashboard/admin")
-  46 |   await expect(page).toHaveURL(/\/dashboard\/admin$/)
-  47 |   await page.goto(`/dashboard/lab/${order.id}`)
-> 48 |   await expect(page.getByText("Verified", { exact: true }).last()).toBeVisible()
-     |                                                                    ^ Error: expect(locator).toBeVisible() failed
-  49 |   await expect(page.getByText("5.4", { exact: true })).toBeVisible()
-  50 |   await expect(page.getByText("Attached report: lab-round-trip.pdf", { exact: true })).toBeVisible()
-  51 |   await page.reload()
-  52 |   await expect(page.getByText("Verified", { exact: true }).last()).toBeVisible()
-  53 |   await expect(page.getByText("5.4", { exact: true })).toBeVisible()
-  54 | })
+  29 |   expect(order.orderNumber).toMatch(/^LAB-\d{4}-\d{6}$/)
+  30 | 
+  31 |   const headers = { Authorization: `Bearer ${token}` }
+  32 |   const statusResponse = await request.patch(`${apiBase}/lab/orders/${order.id}/sample-status`, { headers, data: { status: "SAMPLE_COLLECTED" } })
+  33 |   expect(statusResponse.ok()).toBeTruthy()
+  34 |   const resultResponse = await request.post(`${apiBase}/lab/orders/${order.id}/results`, { headers, data: { resultValue: "5.4", unit: "mmol/L", referenceRange: "3.9 - 5.5", interpretation: "NORMAL", technicianNotes: "Round trip test" } })
+  35 |   expect(resultResponse.ok()).toBeTruthy()
+  36 |   const verifyResponse = await request.post(`${apiBase}/lab/orders/${order.id}/verify`, { headers })
+  37 |   expect(verifyResponse.ok()).toBeTruthy()
+  38 |   const verifiedOrder = (await verifyResponse.json()).data
+  39 |   expect(verifiedOrder.verifiedBy).toBeTruthy()
+  40 |   expect(verifiedOrder.verifiedAt).toBeTruthy()
+  41 |   expect(verifiedOrder.verifier.name).toBeTruthy()
+  42 |   const attachmentResponse = await request.post(`${apiBase}/lab/orders/${order.id}/attachments`, { headers, multipart: { file: { name: "lab-round-trip.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\nE2E lab report") } } })
+  43 |   expect(attachmentResponse.ok(), await attachmentResponse.text()).toBeTruthy()
+  44 | 
+  45 |   await page.goto("/dashboard/login")
+  46 |   await page.evaluate((tokens) => {
+  47 |     sessionStorage.setItem("careplus.accessToken", tokens.accessToken)
+  48 |     sessionStorage.setItem("careplus.refreshToken", tokens.refreshToken)
+  49 |   }, session)
+  50 |   await page.goto("/dashboard/admin")
+  51 |   await expect(page).toHaveURL(/\/dashboard\/admin$/)
+  52 |   await page.goto(`/dashboard/lab/${order.id}`)
+  53 |   await expect(page.getByText(order.orderNumber, { exact: true }).first()).toBeVisible()
+  54 |   await expect(page.getByText("Verified", { exact: true }).last()).toBeVisible()
+  55 |   await expect(page.getByText(new RegExp(`Verified by ${verifiedOrder.verifier.name}`))).toBeVisible()
+  56 |   await expect(page.getByText("5.4", { exact: true })).toBeVisible()
+  57 |   await expect(page.getByText("Attached report: lab-round-trip.pdf", { exact: true })).toBeVisible()
+  58 |   await page.reload()
+  59 |   await expect(page.getByText("Verified", { exact: true }).last()).toBeVisible()
+  60 |   await expect(page.getByText("5.4", { exact: true })).toBeVisible()
+  61 | })
 ```

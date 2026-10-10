@@ -1,4 +1,4 @@
-import { Request, Response, Router } from "express";
+import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "@common/utils/asyncHandler";
 import { sendSuccess, paginationMeta } from "@common/utils/apiResponse";
@@ -18,11 +18,21 @@ import {
   idParamSchema,
   listAdmissionsQuerySchema,
   listWardsQuerySchema,
+  recordAdmissionDepositSchema,
   transferBedSchema,
   updateWardSchema,
 } from "./wards.validators";
 
 const bedStatusSchema = z.object({ status: z.enum(["AVAILABLE", "CLEANING", "MAINTENANCE", "RESERVED"]) });
+const ignoreDoctorAdmissionFinancialFields = (req: Request, _res: Response, next: NextFunction) => {
+  if (req.user?.role === "DOCTOR" && req.body && typeof req.body === "object") {
+    delete req.body.depositAmount;
+    delete req.body.dailyRate;
+    delete req.body.expectedStayDays;
+    req.body.depositAmount = 0;
+  }
+  next();
+};
 
 export const wardsController = {
   listWards: asyncHandler(async (req: Request, res: Response) => {
@@ -71,9 +81,17 @@ export const wardsController = {
     if (!req.user) throw new UnauthorizedError();
     sendSuccess(res, 200, { data: await wardsService.getAdmission(req.user, req.params.id) });
   }),
+  printDischarge: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    sendSuccess(res, 200, { data: await wardsService.getDischargePrintData(req.user, req.params.id) });
+  }),
   admit: asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
     sendSuccess(res, 201, { data: await wardsService.admit(req.user, req.body, req), message: "Patient admitted" });
+  }),
+  recordAdmissionDeposit: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    sendSuccess(res, 201, { data: await wardsService.recordAdmissionDeposit(req.user, req.params.id, req.body, req), message: "Admission deposit recorded" });
   }),
   transferBed: asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
@@ -90,19 +108,26 @@ export const wardsController = {
 const router = Router();
 router.use(authenticate);
 
-router.get("/", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ query: listWardsQuerySchema }), wardsController.listWards);
+router.get("/", requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ query: listWardsQuerySchema }), wardsController.listWards);
 router.post("/", requireRole(["ADMIN"]), validate({ body: createWardSchema }), wardsController.createWard);
 router.patch("/:id", requireRole(["ADMIN"]), validate({ params: idParamSchema, body: updateWardSchema }), wardsController.updateWard);
 router.delete("/:id", requireRole(["ADMIN"]), validate({ params: idParamSchema }), wardsController.deleteWard);
 router.post("/rooms", requireRole(["ADMIN"]), validate({ body: createRoomSchema }), wardsController.createRoom);
 router.post("/beds", requireRole(["ADMIN"]), validate({ body: createBedSchema }), wardsController.createBed);
 router.post("/rooms-beds/batch", requireRole(["ADMIN"]), validate({ body: bulkRoomBedSchema }), wardsController.bulkUpdateRoomBeds);
-router.get("/beds/availability", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), wardsController.bedAvailability);
+router.get("/beds/availability", requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST", "DOCTOR", "NURSE"]), wardsController.bedAvailability);
 router.patch("/beds/:id/status", requireRole(["ADMIN", "NURSE"]), validate({ params: idParamSchema, body: bedStatusSchema }), wardsController.setBedStatus);
 
-router.get("/admissions", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ query: listAdmissionsQuerySchema }), wardsController.listAdmissions);
-router.get("/admissions/:id", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ params: idParamSchema }), wardsController.getAdmission);
-router.post("/admissions", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ body: admitPatientSchema }), wardsController.admit);
+router.get("/admissions", requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ query: listAdmissionsQuerySchema }), wardsController.listAdmissions);
+router.get("/admissions/:id/print", requireRole(["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ params: idParamSchema }), wardsController.printDischarge);
+router.get("/admissions/:id", requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST", "DOCTOR", "NURSE"]), validate({ params: idParamSchema }), wardsController.getAdmission);
+router.post("/admissions", requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST", "DOCTOR", "NURSE"]), ignoreDoctorAdmissionFinancialFields, validate({ body: admitPatientSchema }), wardsController.admit);
+router.post(
+  "/admissions/:id/deposits",
+  requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST"]),
+  validate({ params: idParamSchema, body: recordAdmissionDepositSchema }),
+  wardsController.recordAdmissionDeposit
+);
 router.post(
   "/admissions/:id/transfer",
   requireRole(["ADMIN", "NURSE", "DOCTOR"]),

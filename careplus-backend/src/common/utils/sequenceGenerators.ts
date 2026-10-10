@@ -37,21 +37,67 @@ export async function generateInvoiceNumber(tx: Prisma.TransactionClient): Promi
 }
 
 /**
- * Generates the next per-doctor per-day appointment token number.
+ * Generates the next laboratory order number in the format LAB-YYYY-NNNNNN.
  * MUST be called from within an active Prisma $transaction.
  */
-export async function generateTokenNumber(
-  tx: Prisma.TransactionClient,
-  doctorId: string,
-  date: Date
-): Promise<number> {
-  const dateOnly = new Date(date.toISOString().slice(0, 10));
-
-  const seq = await tx.appointmentTokenSequence.upsert({
-    where: { doctorId_date: { doctorId, date: dateOnly } },
-    create: { doctorId, date: dateOnly, counter: 1 },
+export async function generateLabOrderNumber(tx: Prisma.TransactionClient): Promise<string> {
+  const year = new Date().getFullYear();
+  const seq = await tx.labOrderNumberSequence.upsert({
+    where: { year },
+    create: { year, counter: 1 },
     update: { counter: { increment: 1 } },
   });
+  return `LAB-${year}-${String(seq.counter).padStart(6, "0")}`;
+}
 
-  return seq.counter;
+/**
+ * Allocates the next token number for one doctor/date without reordering existing appointments.
+ * It preserves historical values and only advances the per-doctor/day counter in a DB transaction.
+ */
+export async function generateNextAppointmentToken(
+  tx: Prisma.TransactionClient,
+  doctorId: string,
+  date: string
+): Promise<number> {
+  const [next] = await tx.$queryRaw<Array<{ counter: number }>>`
+    INSERT INTO appointment_token_sequences (doctor_id, date, counter)
+    VALUES (
+      ${doctorId},
+      ${date}::date,
+      COALESCE((
+        SELECT MAX(token_number)
+        FROM appointments
+        WHERE doctor_id = ${doctorId} AND appointment_date = ${date}::date
+      ), 0) + 1
+    )
+    ON CONFLICT (doctor_id, date) DO UPDATE
+    SET counter = GREATEST(
+      appointment_token_sequences.counter,
+      COALESCE((
+        SELECT MAX(token_number)
+        FROM appointments
+        WHERE doctor_id = ${doctorId} AND appointment_date = ${date}::date
+      ), 0)
+    ) + 1
+    RETURNING counter
+  `;
+
+  return next.counter;
+}
+
+export async function findDuplicateAppointmentTokens(
+  tx: Prisma.TransactionClient | { $queryRaw: <T>(query: TemplateStringsArray | string, ...values: unknown[]) => Promise<T> }
+) {
+  return tx.$queryRaw<Array<{ doctorId: string; appointmentDate: string; tokenNumber: number; duplicateCount: number }>>`
+    SELECT
+      doctor_id AS "doctorId",
+      appointment_date::text AS "appointmentDate",
+      token_number AS "tokenNumber",
+      COUNT(*)::int AS "duplicateCount"
+    FROM appointments
+    WHERE token_number > 0
+    GROUP BY doctor_id, appointment_date, token_number
+    HAVING COUNT(*) > 1
+    ORDER BY appointment_date, doctor_id, token_number;
+  `;
 }

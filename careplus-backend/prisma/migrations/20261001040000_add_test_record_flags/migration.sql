@@ -1,0 +1,2 @@
+ALTER TABLE "patients" ADD COLUMN "is_test" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "appointments" ADD COLUMN "is_test" BOOLEAN NOT NULL DEFAULT false;
