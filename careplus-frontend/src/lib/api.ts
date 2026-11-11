@@ -132,7 +132,8 @@ async function refreshAccessToken(): Promise<string | null> {
   return refreshRequest
 }
 
-export async function apiRequest<T>(path: string, init: Parameters<typeof fetch>[1] = {}, retry = true, transientAttempt = 0): Promise<T> {
+export async function apiRequest<T>(path: string, init: Parameters<typeof fetch>[1] & { suppressGlobalErrorToast?: boolean } = {}, retry = true, transientAttempt = 0): Promise<T> {
+  const { suppressGlobalErrorToast, ...requestInit } = init
   const headers = new Headers(init.headers)
   if (!(init.body instanceof FormData)) headers.set("Content-Type", "application/json")
   let accessToken = getAccessToken()
@@ -143,7 +144,7 @@ export async function apiRequest<T>(path: string, init: Parameters<typeof fetch>
 
   let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+    response = await fetch(`${API_BASE_URL}${path}`, { ...requestInit, headers })
   } catch {
     const method = (init.method ?? "GET").toUpperCase()
     if (headers.has("Idempotency-Key") && method !== "GET" && transientAttempt < TRANSIENT_RETRY_DELAYS.length) {
@@ -153,7 +154,7 @@ export async function apiRequest<T>(path: string, init: Parameters<typeof fetch>
     const error = new Error("Unable to reach the hospital server. Check that the backend is running.") as ApiError
     error.status = 0
     error.details = null
-    window.dispatchEvent(new CustomEvent("careplus:api-error", { detail: { message: error.message } }))
+    if (!suppressGlobalErrorToast) window.dispatchEvent(new CustomEvent("careplus:api-error", { detail: { message: error.message } }))
     throw error
   }
 
@@ -165,13 +166,47 @@ export async function apiRequest<T>(path: string, init: Parameters<typeof fetch>
   }
   if (!response.ok || !body.success) {
     const error = createApiError(response, body)
-    window.dispatchEvent(new CustomEvent("careplus:api-error", { detail: { message: error.message } }))
+    if (!suppressGlobalErrorToast) window.dispatchEvent(new CustomEvent("careplus:api-error", { detail: { message: error.message } }))
     throw error
   }
   return body.data as T
 }
 
 export const api = {
+  getPatientProfile: (id: string) => apiRequest<ApiPatientProfileData>(`/patients/${encodeURIComponent(id)}/profile`),
+  getPatientClinicalSummary: (id: string) => apiRequest<ApiPatientClinicalSummary>(`/patients/${encodeURIComponent(id)}/clinical-summary`),
+  getPatientPrintSummary: (id: string) => apiRequest<ApiPatientPrintSummary>(`/patients/${encodeURIComponent(id)}/print-summary`),
+  getDischargePrintData: (id: string) => apiRequest<ApiDischargePrintData>(`/wards/admissions/${encodeURIComponent(id)}/print`),
+  getConsultationPrescriptionPrintData: (id: string) => apiRequest<ApiPrescriptionPrintData>(`/consultations/${encodeURIComponent(id)}/prescription-print`),
+  getConsultation: (id: string) => apiRequest<ApiConsultation>(`/consultations/${encodeURIComponent(id)}`),
+  addConsultationAddendum: (id: string, content: string) => apiRequest<ApiConsultation["addenda"][number]>(`/consultations/${encodeURIComponent(id)}/addenda`, { method: "POST", body: JSON.stringify({ note: content }) }),
+  recordAdmissionDeposit: (id: string, payload: { amount: number; paymentMethod: string; notes?: string }) => apiRequest<ApiAdmission>(`/wards/admissions/${encodeURIComponent(id)}/deposits`, { method: "POST", body: JSON.stringify(payload) }),
+  listWardRounds: (id: string) => apiRequest<ApiWardRound[]>(`/wards/admissions/${encodeURIComponent(id)}/rounds`),
+  createWardRound: (id: string, payload: { subjective: string; findings: string; assessment: string; plan: string }) => apiRequest<ApiWardRound>(`/wards/admissions/${encodeURIComponent(id)}/rounds`, { method: "POST", body: JSON.stringify(payload) }),
+  getMyWardRoundsToday: () => apiRequest<ApiDoctorWardRoundToday[]>("/doctors/me/ward-rounds/today"),
+  setAdmissionReadyForDischarge: (id: string, ready: boolean) => apiRequest<ApiAdmission>(`/wards/admissions/${encodeURIComponent(id)}/ready-for-discharge`, { method: "PATCH", body: JSON.stringify({ ready }) }),
+  getOTSummary: () => apiRequest<ApiOTSummary>("/ot/surgeries/summary"),
+  checkSurgeryAvailability: (payload: Record<string, string>) => apiRequest<{ available: boolean; message?: string }>(`/ot/surgeries/availability?${new URLSearchParams(payload)}`),
+  markSurgeryPreOp: (id: string) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}/pre-op`, { method: "POST" }),
+  postponeSurgery: (id: string, payload: { reason: string; scheduledStart: string; scheduledEnd: string }) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}/postpone`, { method: "POST", body: JSON.stringify(payload) }),
+  getPharmacySettings: () => apiRequest<ApiPharmacySettings>("/pharmacy/settings"),
+  updatePharmacySettings: (payload: ApiPharmacySettingsInput) => apiRequest<ApiPharmacySettings>("/pharmacy/settings", { method: "PUT", body: JSON.stringify(payload) }),
+  updatePharmacyAdminPin: (payload: { currentPin?: string; newPin: string }) => apiRequest<null>("/pharmacy/settings/admin-pin", { method: "PUT", body: JSON.stringify(payload) }),
+  uploadPharmacyLogo: (file: File) => { const body = new FormData(); body.append("file", file); return apiRequest<{ logoUrl: string }>("/pharmacy/settings/logo", { method: "POST", body }) },
+  archiveMedicine: (id: string) => apiRequest<ApiMedicine>(`/pharmacy/medicines/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  dispensePrescription: (id: string, payload: Record<string, unknown>) => apiRequest<{ prescription: ApiPrescription; sale: ApiPharmacySale }>(`/pharmacy/prescriptions/${encodeURIComponent(id)}/dispense`, { method: "POST", body: JSON.stringify(payload) }),
+  getPharmacyOverview: () => apiRequest<ApiPharmacyOverview>("/pharmacy/overview"),
+  getPharmacyReports: (params: ApiPharmacyReportParams) => apiRequest<ApiPharmacyReports>(`/pharmacy/reports?${queryParams(params)}`),
+  listPharmacyInvoices: (params: ApiListParams) => apiRequest<ApiPage<ApiPharmacySale>>(`/pharmacy/invoices?${queryParams(params)}`),
+  getPharmacyInvoice: (id: string) => apiRequest<ApiPharmacyInvoice>(`/pharmacy/invoices/${encodeURIComponent(id)}`),
+  voidPharmacySale: (id: string, reason: string) => apiRequest<ApiPharmacyInvoice>(`/pharmacy/invoices/${encodeURIComponent(id)}/void`, { method: "POST", body: JSON.stringify({ reason }) }),
+  listPharmacySaleAdjustments: (params: ApiListParams) => apiRequest<ApiPage<ApiPharmacySaleAdjustment>>(`/pharmacy/sale-adjustments?${queryParams(params)}`),
+  listPharmacyDiscountAudits: (params: ApiListParams) => apiRequest<ApiPage<ApiPharmacyDiscountAudit> & { totalDiscountAmount: number }>(`/pharmacy/discount-audits?${queryParams(params)}`),
+  listPharmacyLedgerAccounts: (params: ApiListParams) => apiRequest<ApiPage<ApiPharmacyLedgerAccount> & { summary: { receivable: number; payable: number } }>(`/pharmacy/khata/accounts?${queryParams(params)}`),
+  createPharmacyLedgerAccount: (payload: Record<string, unknown>) => apiRequest<ApiPharmacyLedgerAccount>("/pharmacy/khata/accounts", { method: "POST", body: JSON.stringify(payload) }),
+  getPharmacyLedger: (id: string) => apiRequest<ApiPharmacyLedger>(`/pharmacy/khata/accounts/${encodeURIComponent(id)}`),
+  recordPharmacyLedgerPayment: (id: string, payload: Record<string, unknown>) => apiRequest<{ entry: ApiPharmacyLedgerEntry }>(`/pharmacy/khata/accounts/${encodeURIComponent(id)}/payments`, { method: "POST", body: JSON.stringify(payload) }),
+  adjustPharmacyLedger: (id: string, payload: Record<string, unknown>) => apiRequest<ApiPharmacyLedgerEntry>(`/pharmacy/khata/accounts/${encodeURIComponent(id)}/adjustments`, { method: "POST", body: JSON.stringify(payload) }),
   login: (email: string, password: string) =>
     apiRequest<{ accessToken: string; refreshToken: string; user: ApiUser }>("/auth/login", {
       method: "POST",
@@ -339,13 +374,13 @@ export const api = {
   addMedicineBatch: (payload: ApiAddBatchInput) => apiRequest<ApiMedicineBatch>("/pharmacy/batches", { method: "POST", body: JSON.stringify(payload) }),
   stockIn: (payload: ApiStockInInput) => apiRequest<ApiMedicineBatch>("/pharmacy/stock-in", { method: "POST", body: JSON.stringify(payload) }),
   dispense: (payload: ApiDispenseInput) => apiRequest<ApiPrescriptionItem>("/pharmacy/dispense", { method: "POST", body: JSON.stringify(payload) }),
-  createPharmacySale: (payload: ApiCreatePharmacySaleInput) => apiRequest<ApiPharmacySale>("/pharmacy/sales", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(payload) }),
+  createPharmacySale: (payload: ApiCreatePharmacySaleInput, approvalToken?: string, adminPin?: string) => apiRequest<ApiPharmacySale>("/pharmacy/sales", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID(), ...(approvalToken ? { "X-Discount-Approval-Token": approvalToken } : {}), ...(adminPin ? { "X-Discount-Approval-Pin": adminPin } : {}) }, body: JSON.stringify(payload) }),
   getPharmacySaleInvoice: (id: string) => apiRequest<ApiInvoice>(`/pharmacy/sales/${encodeURIComponent(id)}/invoice`),
   returnStock: (payload: ApiReturnStockInput) => apiRequest<ApiMedicineBatch>("/pharmacy/return", { method: "POST", body: JSON.stringify(payload) }),
   adjustStock: (payload: ApiAdjustStockInput) => apiRequest<ApiMedicineBatch>("/pharmacy/adjust", { method: "POST", body: JSON.stringify(payload) }),
   writeOffStock: (payload: ApiWriteOffInput) => apiRequest<ApiMedicineBatch>("/pharmacy/write-off", { method: "POST", body: JSON.stringify(payload) }),
   listStockMovements: (medicineId?: string) => apiRequest<ApiStockMovement[]>(`/pharmacy/stock-movements?limit=200${medicineId ? `&medicineId=${encodeURIComponent(medicineId)}` : ""}`),
-  listPrescriptions: (status?: "DRAFT" | "SIGNED" | "COMPLETED" | "VOID") => apiRequest<ApiPrescription[]>(`/prescriptions?limit=100${status ? `&status=${status}` : ""}`),
+  listPrescriptions: (status?: "DRAFT" | "SIGNED" | "COMPLETED" | "DISPENSED" | "VOID") => apiRequest<ApiPrescription[]>(`/prescriptions?limit=100${status ? `&status=${status}` : ""}`),
   getPrescription: (id: string) => apiRequest<ApiPrescription>(`/prescriptions/${encodeURIComponent(id)}`),
   createPrescription: (payload: ApiCreatePrescriptionInput) => apiRequest<ApiPrescription>("/prescriptions", { method: "POST", body: JSON.stringify(payload) }),
   signPrescription: (id: string) => apiRequest<ApiPrescription>(`/prescriptions/${encodeURIComponent(id)}/sign`, { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() } }),
@@ -422,7 +457,7 @@ export const api = {
     const qs = new URLSearchParams()
     if (from) qs.set("from", from)
     if (to) qs.set("to", to)
-    return apiRequest<{ invoiceCount: number; totalBilled: number; totalCollected: number; totalOutstanding: number }>(`/reports/revenue-summary${qs.toString() ? `?${qs.toString()}` : ""}`)
+    return apiRequest<{ invoiceCount: number; totalBilled: number; totalCollected: number; totalOutstanding: number; discountsGiven: number }>(`/reports/revenue-summary${qs.toString() ? `?${qs.toString()}` : ""}`)
   },
   getReportsRevenueTrend: (from?: string, to?: string) => {
     const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()
@@ -435,15 +470,15 @@ export const api = {
     if (date) qs.set("date", date)
     return apiRequest<ApiSurgery[]>(`/ot/surgeries?${qs.toString()}`)
   },
-  getSurgery: (id: string) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}`),
+  getSurgery: (id: string, options: { suppressGlobalErrorToast?: boolean } = {}) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}`, options),
   listOTRooms: (includeInactive = false) => apiRequest<ApiOTRoom[]>(`/ot/rooms${includeInactive ? "?includeInactive=true" : ""}`),
   createOTRoom: (payload: ApiOTRoomInput) => apiRequest<ApiOTRoom>("/ot/rooms", { method: "POST", body: JSON.stringify(payload) }),
   updateOTRoom: (id: string, payload: ApiOTRoomInput) => apiRequest<ApiOTRoom>(`/ot/rooms/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteOTRoom: (id: string) => apiRequest<ApiOTRoom>(`/ot/rooms/${encodeURIComponent(id)}`, { method: "DELETE" }),
   scheduleSurgery: (payload: ApiScheduleSurgeryInput) => apiRequest<ApiSurgery>("/ot/surgeries", { method: "POST", body: JSON.stringify(payload) }),
   updateSurgeryChecklist: (id: string, patch: Record<string, boolean>) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}/checklist`, { method: "PATCH", body: JSON.stringify(patch) }),
-  startSurgery: (id: string) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}/start`, { method: "POST" }),
-  moveSurgeryToRecovery: (id: string) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}/recovery`, { method: "POST" }),
+  startSurgery: (id: string, payload: Record<string, unknown> = {}) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}/start`, { method: "POST", body: JSON.stringify(payload) }),
+  moveSurgeryToRecovery: (id: string, payload: Record<string, unknown> = {}) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}/recovery`, { method: "POST", body: JSON.stringify(payload) }),
   completeSurgery: (id: string, payload: { postOpNotes?: string; complications?: string } = {}) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}/complete`, { method: "POST", body: JSON.stringify(payload) }),
   cancelSurgery: (id: string, reason: string) => apiRequest<ApiSurgery>(`/ot/surgeries/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
   getReportsAppointmentStats: (from?: string, to?: string, departmentId?: string) => {
@@ -473,6 +508,8 @@ export interface ApiUser {
 }
 
 export interface ApiStaffProfile {
+  pmdcRegistrationNo?: string | null
+  phcRegistrationNo?: string | null
   id: string
   userId: string
   qualification?: string | null
@@ -522,11 +559,11 @@ export interface ApiRoomBedBatchInput {
   addBeds: Array<{ wardId: string; roomNumber: string; bedNumbers: string[] }>
 }
 export interface ApiBedAvailability extends ApiBed { room: { roomNumber: string; ward: { wardName: string; wardType: ApiWardType } }; admissions: Array<{ id: string; patient: { id: string; mrNumber: string; firstName: string; lastName: string }; attendingDoctor?: { user: { name: string } } | null; admissionDate: string }> }
-export interface ApiAdmission { id: string; patientId: string; bedId: string; attendingDoctorId: string; admissionType: ApiAdmissionType; admissionDate: string; admissionReason: string; depositAmount: number | string; status: ApiAdmissionStatus; dischargeDate?: string | null; dischargeSummary?: string | null; dischargeNotes?: string | null; patient: { id: string; mrNumber: string; firstName: string; lastName: string }; bed: { id: string; bedNumber: string; dailyRate: number | string; room: { roomNumber: string; ward: { wardName: string; wardType: ApiWardType } } }; attendingDoctor?: { user: { id: string; name: string } } | null; transfers?: ApiTransferRecord[] }
+export interface ApiAdmission { depositStatus?: string; outstandingBalance?: number; id: string; patientId: string; bedId: string; attendingDoctorId: string; admissionType: ApiAdmissionType; admissionDate: string; admissionReason: string; depositAmount: number | string; status: ApiAdmissionStatus; dischargeDate?: string | null; dischargeSummary?: string | null; dischargeNotes?: string | null; patient: ApiPatient; readyForDischarge?: boolean; bed: { id: string; bedNumber: string; dailyRate: number | string; room: { roomNumber: string; ward: { wardName: string; wardType: ApiWardType } } }; attendingDoctor?: { user: { id: string; name: string } } | null; transfers?: ApiTransferRecord[] }
 export interface ApiTransferRecord { id: string; admissionId: string; fromBedId: string; toBedId: string; transferDate: string; reason: string; createdBy?: string; fromBed?: { bedNumber: string; room: { roomNumber: string; ward: { wardName: string; wardType: ApiWardType } } }; toBed?: { bedNumber: string; room: { roomNumber: string; ward: { wardName: string; wardType: ApiWardType } } } }
 export interface ApiAdmitPatientInput { patientId: string; bedId: string; attendingDoctorId: string; admissionType?: ApiAdmissionType; admissionReason: string; depositAmount?: number }
 export interface ApiTransferInput { toBedId: string; reason: string }
-export interface ApiDischargeInput { dischargeSummary: string; dischargeNotes?: string }
+export interface ApiDischargeInput extends ApiDischargeDetails { confirmUnpaidBalance?: boolean; dischargeSummary?: string; dischargeNotes?: string }
 export interface ApiNurseAssignmentInput { nurseUserId: string; wardId: string; shiftDate: string; shiftType: ApiShiftType }
 export interface ApiNurseAssignment { id: string; nurseUserId: string; wardId: string; shiftDate: string; shiftType: ApiShiftType; isActive: boolean; nurse?: { id: string; name: string; email: string } }
 export interface ApiRecordVitalsInput { admissionId: string; bpSystolic?: number; bpDiastolic?: number; temperature?: number; pulse?: number; respiratoryRate?: number; oxygenSaturation?: number; painScore?: number; notes?: string }
@@ -575,7 +612,8 @@ export interface ApiPatient {
 
 export interface ApiDoctor {
   id: string
-  user: { name: string; profilePictureUrl?: string | null }
+  userId?: string
+  user: { id?: string; name: string; profilePictureUrl?: string | null }
   department: { id: string; name: string } | null
   specialization?: string | null
   scheduleJson?: unknown
@@ -926,7 +964,14 @@ export interface ApiLabResultInput {
   inventoryOverrideReason?: string
 }
 
-export interface ApiConsultation {
+export interface ApiConsultation extends ApiClinicalVitals {
+  patient: ApiPatient
+  appointment: ApiAppointment
+  doctor: ApiClinicalDoctor
+  prescriptions: ApiPrescription[]
+  labOrders: ApiLabOrder[]
+  ultrasoundOrders: ApiUltrasoundOrder[]
+  addenda: Array<{ id: string; note: string; createdAt: string; author: { name: string } }>
   id: string
   appointmentId: string
   chiefComplaint?: string | null
@@ -962,6 +1007,9 @@ export interface ApiPayment {
 }
 
 export interface ApiInvoice {
+  subtotal?: number | string
+  discountAmount?: number | string
+  taxAmount?: number | string
   id: string
   invoiceNumber: string
   patientId: string
@@ -993,6 +1041,7 @@ export interface ApiRecordPaymentInput {
 }
 
 export interface ApiMedicineBatch {
+  supplier?: { id: string; name: string } | null
   id: string
   medicineId: string
   batchNumber: string
@@ -1005,6 +1054,10 @@ export interface ApiMedicineBatch {
 }
 
 export interface ApiMedicine {
+  barcode?: string | null
+  form?: string | null
+  manufacturer?: string | null
+  unitType?: string | null
   id: string
   name: string
   genericName?: string | null
@@ -1014,7 +1067,7 @@ export interface ApiMedicine {
   batches: ApiMedicineBatch[]
 }
 
-export interface ApiCreateMedicineInput { name: string; genericName?: string; strength?: string; form?: string; categoryId?: string }
+export interface ApiCreateMedicineInput { initialBatch?: { batchNumber: string; expiryDate: string; purchasePrice: number; sellingPrice: number; stockQuantity: number; reorderLevel?: number }; name: string; genericName?: string; strength?: string; form?: string; categoryId?: string; barcode?: string | null; manufacturer?: string; unitType?: string }
 export interface ApiAddBatchInput {
   medicineId: string
   batchNumber: string
@@ -1024,17 +1077,21 @@ export interface ApiAddBatchInput {
   stockQuantity: number
   reorderLevel?: number
 }
-export interface ApiStockInInput { batchId: string; quantity: number; reason?: string }
+export interface ApiStockInInput { batchId?: string; medicineId?: string; quantity: number; reason?: string; batchNumber?: string; expiryDate?: string; purchasePrice?: number; sellingPrice?: number; reorderLevel?: number; supplier?: string }
 export interface ApiDispenseInput { prescriptionItemId: string; quantity: number }
 export interface ApiCreatePharmacySaleInput {
+  paidNow?: number
+  paidNowMethod?: ApiPayment["paymentMethod"]
+  patientId?: string
+  discountReason?: string
   items: Array<{ medicineId: string; quantity: number; unitPrice?: number; discount: number }>
   tax: number
-  paymentMethod: ApiPayment["paymentMethod"]
+  paymentMethod: ApiPayment["paymentMethod"] | "CREDIT"
   customerName?: string
   customerPhone?: string
 }
 export interface ApiPharmacySaleItem { id: string; medicineId: string; batchId: string; quantity: number; unitPrice: number | string; discount: number | string; subtotal: number | string; medicine: { name: string }; batch: ApiMedicineBatch }
-export interface ApiPharmacySale { id: string; cashierId?: string; totalAmount: number | string; paymentMethod: ApiPayment["paymentMethod"]; customerName?: string | null; customerPhone?: string | null; items: ApiPharmacySaleItem[]; invoice: ApiInvoice }
+export interface ApiPharmacySale { cashier?: { id: string; name: string }; subtotal?: number | string; discountAmount?: number | string; taxAmount?: number | string; createdAt?: string; id: string; cashierId?: string; totalAmount: number | string; paymentMethod: ApiPayment["paymentMethod"] | "CREDIT"; customerName?: string | null; customerPhone?: string | null; items: ApiPharmacySaleItem[]; invoice: ApiInvoice }
 export interface ApiCreatePrescriptionInput {
   consultationId: string
   padData?: {
@@ -1071,15 +1128,25 @@ export interface ApiWriteOffInput { batchId: string; quantity: number; type: "DA
 
 export interface ApiStockMovement {
   id: string
-  movementType: "IN" | "OUT" | "ADJUSTMENT" | "RETURN" | "EXPIRED" | "DAMAGED"
+  movementType: "IN" | "OUT" | "ADJUSTMENT" | "RETURN" | "EXPIRED" | "DAMAGED" | "VOID"
   quantity: number
   reason?: string | null
   createdAt: string
-  batch: { medicineId: string; medicine: { name: string } }
+  invoiceReference?: string | null
+  invoice?: { id: string; invoiceNumber: string } | null
+  patient?: { name?: string; firstName: string; lastName: string; mrNumber: string } | null
+  batch: { medicineId: string; batchNumber?: string; medicine: { name: string } }
   createdByUser?: { name: string } | null
 }
 
 export interface ApiPrescriptionItem {
+  isCatalogItem?: boolean
+  doseAmount?: number | string | null
+  doseUnit?: string | null
+  frequencyCode?: string | null
+  durationValue?: number | null
+  durationUnit?: string | null
+  requiresPharmacistReview?: boolean
   id: string
   medicineId?: string | null
   medicineName: string
@@ -1095,7 +1162,7 @@ export interface ApiPrescription {
   consultationId: string
   patientId: string
   doctorId: string
-  status: "DRAFT" | "SIGNED" | "COMPLETED" | "VOID"
+  status: "DRAFT" | "SIGNED" | "COMPLETED" | "DISPENSED" | "VOID"
   createdAt: string
   signedAt?: string | null
   items: ApiPrescriptionItem[]
@@ -1112,7 +1179,7 @@ export interface ApiPrescription {
   patientGender?: "MALE" | "FEMALE" | "OTHER" | null
   patientWeight?: string | null
   configurationSnapshot?: Record<string, unknown> | null
-  patient?: { firstName: string; lastName: string }
+  patient?: { firstName: string; lastName: string; mrNumber?: string }
   doctor?: { user: { name: string } }
 }
 
@@ -1128,6 +1195,15 @@ export interface ApiAuditLog {
 }
 
 export interface ApiSurgery {
+  assistantSurgeon?: { user: { name: string } } | null
+  priority?: string
+  anesthesiaType?: string | null
+  notes?: string | null
+  intraoperativeNotes?: string | null
+  outcomeNotes?: string | null
+  postOpNotes?: string | null
+  emergencyOverrideReason?: string | null
+  statusEvents?: Array<{ id: string; status: string; fromStatus?: string; toStatus: string; actorName?: string; createdAt: string; actor?: { name: string }; reason?: string | null }>
   id: string
   surgeryType: string
   scheduledStart: string
@@ -1135,7 +1211,7 @@ export interface ApiSurgery {
   patient: { mrNumber?: string; firstName: string; lastName: string }
   otRoomId: string
   surgeonId: string
-  surgeon: { user: { name: string } }
+  surgeon: { user: { name: string }; specialization?: string | null }
   otRoom: { name: string }
   status: string
   preOpChecklistJson?: Record<string, boolean>
@@ -1144,12 +1220,12 @@ export interface ApiSurgery {
 }
 export interface ApiOTRoom { id: string; name: string; isActive: boolean }
 export interface ApiOTRoomInput { name: string; isActive: boolean }
-export interface ApiScheduleSurgeryInput { patientId: string; otRoomId: string; surgeryType: string; surgeonId: string; scheduledStart: string; scheduledEnd: string; anesthetistId?: string }
+export interface ApiScheduleSurgeryInput { patientId: string; otRoomId: string; surgeryType: string; surgeonId: string; scheduledStart: string; scheduledEnd: string; anesthetistId?: string; assistantSurgeonId?: string; priority?: string; anesthesiaType?: string; notes?: string; preOpChecklist?: Record<string, boolean> }
 export interface ApiLowStockReport { medicineName: string; batchNumber: string; stockQuantity: number; reorderLevel: number }
 export interface ApiNearExpiryReport { medicineName: string; batchNumber: string; expiryDate: string; stockQuantity: number }
 export interface ApiDoctorProductivityReport { doctorId: string; doctorName: string; consultationCount: number }
 
-const otStatusMap: Record<string, OTStatus> = { SCHEDULED: "Scheduled", PRE_OP: "Pre-op", IN_PROGRESS: "In Progress", RECOVERY: "Recovery", COMPLETED: "Completed", CANCELLED: "Cancelled" }
+const otStatusMap: Record<string, OTStatus> = { SCHEDULED: "Scheduled", PRE_OP: "Pre-op", IN_PROGRESS: "In Progress", RECOVERY: "Recovery", COMPLETED: "Completed", CANCELLED: "Cancelled", POSTPONED: "Postponed" }
 const checklistLabels: Record<string, string> = {
   consent_form_confirmed: "Consent form signed", fasting_confirmed: "Fasting confirmed (NPO 8 hrs)",
   blood_arranged: "Blood products available/cross-matched", identity_verified: "Site marked & verified",
@@ -1167,6 +1243,8 @@ export function toSurgery(surgery: ApiSurgery): Surgery {
     otRoom: surgery.otRoom.name, scheduledDate: start.toISOString().slice(0, 10),
     scheduledTime: start.toISOString().slice(11, 16), durationMinutes: Math.max(1, Math.round((end.getTime() - start.getTime()) / 60000)),
     status: otStatusMap[surgery.status] ?? "Scheduled", preOpChecklist: Object.keys(checklistLabels).map((key) => ({ id: key, label: checklistLabels[key], done: Boolean(checklist[key]) })),
+    assistantSurgeonName: surgery.assistantSurgeon?.user.name, priority: surgery.priority, anesthesiaType: surgery.anesthesiaType ?? undefined,
+    notes: surgery.notes ?? undefined, intraoperativeNotes: surgery.intraoperativeNotes ?? undefined, outcomeNotes: surgery.outcomeNotes ?? undefined, postOpNotes: surgery.postOpNotes ?? undefined, emergencyOverrideReason: surgery.emergencyOverrideReason ?? undefined, statusEvents: surgery.statusEvents,
     activityLog: [],
   }
 }
@@ -1261,6 +1339,7 @@ export function toDoctor(doctor: ApiDoctor): Doctor {
   const schedule = typeof doctor.scheduleJson === "object" && doctor.scheduleJson !== null ? (doctor.scheduleJson as any).slotsPerDay || [] : []
   return {
     id: doctor.id,
+    userId: doctor.userId ?? doctor.user.id,
     name: doctor.user.name,
     department: doctor.department?.name ?? "General Medicine",
     designation: doctor.specialization ?? "Consultant",
@@ -1355,3 +1434,140 @@ export function toInvoice(invoice: ApiInvoice, patient?: Patient): Invoice {
     auditTrail: [],
   }
 }
+
+function queryParams(params: object): string {
+  return new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "").map(([key, value]) => [key, String(value)])).toString()
+}
+
+export function getAccessTokenExpiration(): number | null {
+  const token = getAccessToken()
+  if (!token) return null
+  try {
+    const payload: { exp?: number } = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")))
+    return typeof payload.exp === "number" ? payload.exp * 1000 : null
+  } catch { return null }
+}
+
+export async function keepSessionSignedIn(): Promise<boolean> {
+  return Boolean(await refreshAccessToken())
+}
+
+export async function logoutAndClearSession(): Promise<void> {
+  try { await api.logout() } finally { clearSession() }
+}
+
+export async function loadAuthenticatedImage(path?: string | null): Promise<string | null> {
+  if (!path) return null
+  const url = new URL(apiAssetUrl(path), window.location.origin)
+  const apiOrigin = new URL(API_BASE_URL, window.location.origin).origin
+  // Never send a session credential to a third-party image host.
+  const headers = new Headers()
+  if (url.origin === apiOrigin) {
+    let token = getAccessToken()
+    if (token && tokenNeedsRefresh(token)) token = await refreshAccessToken()
+    if (token) headers.set("Authorization", `Bearer ${token}`)
+  }
+  try {
+    const response = await fetch(url, { headers })
+    return response.ok ? URL.createObjectURL(await response.blob()) : null
+  } catch { return null }
+}
+
+export function openAuthenticatedPrintWindow(path: string): Window | null {
+  const url = new URL(path, window.location.origin)
+  if (url.origin !== window.location.origin) return null
+  // Same-origin child windows inherit sessionStorage for the print route.
+  const child = window.open(url.href, "_blank")
+  if (child) child.opener = null
+  return child
+}
+
+export interface ApiClinicalVitals {
+  bpSystolic?: number | null; bpDiastolic?: number | null; pulse?: number | null
+  temperature?: number | null; temperatureUnit?: string | null; respiratoryRate?: number | null
+  weight?: number | null; oxygenSaturation?: number | null; heightCm?: number | null
+  vitalsEstimated?: boolean; isCritical?: boolean
+}
+export interface ApiClinicalDoctor {
+  id: string; user: { id: string; name: string; staffProfile?: ApiStaffProfile | null }
+  qualification?: string | null; specialization?: string | null; department?: { name: string } | null
+}
+export interface ApiPatientClinicalSummary {
+  allergies: string[]; allergiesReviewed: boolean; chronicConditions: string[]; chronicConditionsReviewed: boolean; medicalHistory?: string | null
+}
+export interface ApiPatientProfileData {
+  lastVitals?: ApiPatientPrintSummary["lastVitals"]
+  patient: ApiPatient; consultations: ApiConsultation[]; admissions: ApiAdmission[]; surgeries: ApiSurgery[]
+  labOrders: ApiLabOrder[]; ultrasoundOrders: ApiUltrasoundOrder[]; invoices: Array<ApiInvoice & { pharmacySale?: ApiPharmacySale | null }>
+  ledgerEntries: Array<{ id: string; amount: number | string; createdAt: string; paymentMethod: string }>; activeAdmission: ApiAdmission | null
+  startableAppointments: ApiAppointment[]
+}
+export interface ApiDischargeDetails {
+  diagnosis?: string; courseInHospital?: string; procedures?: string[]; medications?: string[]
+  conditionAtDischarge?: string; followUpDate?: string; referral?: string; instructions?: string
+}
+export interface ApiWardRound { id: string; roundAt: string; doctor?: { name: string }; subjective?: string; findings?: string; assessment?: string; plan?: string }
+export interface ApiDoctorWardRoundToday {
+  id: string; daysAdmitted: number; latestVitals?: ApiClinicalVitals
+  pendingLabResults: Array<{ id: string; test: string; status: string; latestResult?: { resultValue: string; unit?: string; interpretation?: string } }>
+  pendingUltrasoundResults: Array<{ id: string; examType: string; status: string }>
+  activeMedicationOrders: Array<{ prescriptionId: string; name: string; dose: string; frequency: string; durationDays: number }>
+}
+export interface ApiOTSummary { todaysSurgeries: number; inProgress: number; completedToday: number; conflicts: number }
+export interface ApiPagination { page: number; pages: number; total: number; limit: number }
+export interface ApiPage<T> { items: T[]; pagination: ApiPagination }
+export interface ApiListParams { search?: string; from?: string; to?: string; page?: number; limit?: number; type?: string; patientId?: string; staffId?: string; cashier?: string }
+export interface ApiPharmacySettingsInput {
+  name: string; address: string; phone: string; currency: "PKR"; defaultReceiptFormat: "a4" | "receipt"
+  cashierMaxDiscountPercent: number; lossAlertThreshold: number; defaultLowStockLevel: number
+}
+export interface ApiPharmacySettings extends ApiPharmacySettingsInput { logoUrl?: string | null; adminPinConfigured: boolean; lastBackupAt: string | null }
+export interface ApiPharmacyLedgerAccount { id: string; customerName: string; customerPhone?: string | null; type: "RECEIVABLE" | "PAYABLE"; balance: number | string; patientId?: string | null; patient?: ApiPatient | null; lastActivity?: { createdAt: string } | null; createdAt: string }
+export interface ApiPharmacyLedgerEntry { id: string; type: string; amount: number | string; balanceAfter: number | string; paymentMethod?: string | null; notes?: string | null; createdAt: string; invoice?: { id: string; invoiceNumber: string } | null; createdByUser?: { name: string } | null }
+export interface ApiPharmacyLedger { balance: number; account: ApiPharmacyLedgerAccount; entries: ApiPharmacyLedgerEntry[]; pagination: ApiPagination }
+export interface ApiPharmacySaleAdjustment {
+  id: string; type: "VOID" | "RETURN"; createdAt: string; reason: string; refundAmount: number | string
+  invoice: { id: string; invoiceNumber: string }; actor: { name: string }
+  items: Array<{ id: string; quantity: number; returnedToStock: boolean; saleItemId: string; saleItem?: { medicine: { name: string } } }>
+}
+export interface ApiPharmacyInvoice extends ApiInvoice { pharmacySale: ApiPharmacySale & { cashier: { id: string; name: string }; adjustments: ApiPharmacySaleAdjustment[]; dispensedBy: Array<{ name: string }> }; adjustments: ApiPharmacySaleAdjustment[] }
+export interface ApiPharmacyDiscountAudit {
+  id: string; createdAt: string; invoice: { id: string; invoiceNumber: string }; cashier: { name: string }
+  approvingAdmin?: { name: string } | null; discountAmount: number | string; discountPercent: number | string; reason: string
+}
+export interface ApiPharmacyReportParams extends ApiListParams {
+  period?: "today" | "yesterday" | "week" | "month" | "all" | "custom"; expiryDays?: number
+  categoriesPage?: number; topMedicinesPage?: number; lowStockPage?: number; expiringPage?: number; expiredPage?: number; cashiersPage?: number; paymentMethodsPage?: number
+}
+export interface ApiPharmacyReports {
+  dateRange: { from: string; to: string }
+  summary: { totalSalesRevenue: number; transactions: number; discountsGiven: number; taxesCollected: number; returns: number; netRevenue: number; grossProfit: number }
+  categories: ApiPage<{ id: string; name: string; genericName?: string | null; quantity: number; revenue: number }>
+  topMedicines: ApiPage<{ id: string; name: string; genericName?: string | null; quantity: number; revenue: number }>
+  lowStock: ApiPage<ApiPharmacyStockReport>; expiringSoon: ApiPage<ApiPharmacyStockReport> & { days: number }; expiredStock: ApiPage<ApiPharmacyStockReport>
+  salesByCashier: ApiPage<{ id: string; name: string; transactions: number; revenue: number }>
+  salesByPaymentMethod: ApiPage<{ paymentMethod: string; transactions: number; revenue: number }>
+}
+export interface ApiPharmacyStockReport { id: string; medicineName: string; batchNumber: string; stockQuantity: number; reorderLevel: number; expiryDate: string }
+export interface ApiPharmacyOverview {
+  today: { date: string; sales: number; transactions: number }
+  lowStock: { count: number; items: Array<{ medicineId: string; medicineName: string; genericName?: string | null; batchNumber: string; stockQuantity: number; reorderLevel: number }> }
+  expiring: { count: number }; expired: { count: number }
+  inventoryValue: { cost: number; selling: number; units: number }
+  recentSales: Array<{ id: string; invoiceId: string; invoiceNumber: string; createdAt: string; itemCount: number; paymentMethod: string; amount: number }>
+}
+
+export interface ApiPrintLabResult { id: string; testName: string; resultValue: string; unit?: string | null; referenceRange?: string | null; createdAt: string }
+export interface ApiPrintUltrasound { id: string; examinationType: string; conclusion?: string | null; completedAt?: string | null }
+export interface ApiPatientPrintSummary {
+  patient: ApiPatient & { dateOfBirth?: string | null }; chronicConditions: string[]
+  medicines: Array<{ medicineName: string; dosage: string; frequency: string; durationDays: number; prescribedAt: string }>
+  recentVisits: Array<{ id: string; visitDate: string; diagnosis?: string | null; chiefComplaint?: string | null; doctorSpecialty?: string | null }>
+  labResults: ApiPrintLabResult[]; ultrasoundResults: ApiPrintUltrasound[]; admissions: ApiAdmission[]; balance: number
+  lastVitals?: { systolic?: number | null; diastolic?: number | null; pulse?: number | null; temperature?: number | null; temperatureUnit?: string; respiratoryRate?: number | null; weight?: number | null; oxygenSaturation?: number | null; heightCm?: number | null; recordedAt: string; estimated?: boolean; critical?: boolean } | null
+}
+export interface ApiDischargePrintData {
+  admission: ApiAdmission & { dischargeDetails?: ApiDischargeDetails; attendingDoctor: ApiClinicalDoctor }
+  procedures: ApiSurgery[]; labResults: ApiPrintLabResult[]; ultrasoundResults: ApiPrintUltrasound[]; outstandingBalance: number
+}
+export interface ApiPrescriptionPrintData extends ApiConsultation { prescription: ApiPrescription }

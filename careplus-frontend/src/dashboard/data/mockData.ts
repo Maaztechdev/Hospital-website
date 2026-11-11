@@ -38,16 +38,16 @@ const mkAppt = (partial: Omit<Appointment, "id" | "token" | "createdAt">): Appoi
 }
 
 export const APPOINTMENTS: Appointment[] = [
-  mkAppt({ mrNumber: "MR-2026-000101", patientName: "Fatima Zahra", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(0), time: "09:00", type: "Follow-up", status: "WAITING", priority: "Routine", waitingSince: iso(0, 8, 40) }),
-  mkAppt({ mrNumber: "MR-2026-000104", patientName: "Hassan Ali", doctorId: "doc-3", doctorName: "Dr. Sana Riaz", department: "Pediatrics", date: isoDate(0), time: "09:15", type: "New Visit", status: "IN_CONSULTATION", priority: "Urgent" }),
-  mkAppt({ mrNumber: "MR-2026-000105", patientName: "Mariam Yousaf", doctorId: "doc-5", doctorName: "Dr. Hina Sheikh", department: "Gynecology", date: isoDate(0), time: "11:00", type: "New Visit", status: "CONFIRMED", priority: "Routine" }),
-  mkAppt({ mrNumber: "MR-2026-000102", patientName: "Ahmed Raza", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(0), time: "08:30", type: "Follow-up", status: "COMPLETED", priority: "Routine" }),
-  mkAppt({ mrNumber: "MR-2026-000106", patientName: "Usman Tariq", doctorId: "doc-2", doctorName: "Dr. Bilal Hassan", department: "Orthopedics", date: isoDate(0), time: "10:20", type: "Consultation", priority: "Urgent", status: "WAITING", waitingSince: iso(0, 9, 5) }),
-  mkAppt({ mrNumber: "MR-2026-000103", patientName: "Zainab Bibi", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(0), time: "09:20", type: "Follow-up", priority: "Emergency", status: "WAITING", waitingSince: iso(0, 8, 20) }),
-  mkAppt({ mrNumber: "MR-2026-000107", patientName: "Ayesha Siddiqui", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(1), time: "09:10", type: "New Visit", status: "PENDING_APPROVAL", priority: "Routine", reason: "Fever and body ache for 3 days" }),
-  mkAppt({ mrNumber: "MR-2026-000108", patientName: "Imran Khalid", doctorId: "doc-2", doctorName: "Dr. Bilal Hassan", department: "Orthopedics", date: isoDate(1), time: "11:20", type: "Follow-up", status: "PENDING_APPROVAL", priority: "Routine", reason: "Knee pain follow-up" }),
-  mkAppt({ mrNumber: "MR-2026-000102", patientName: "Ahmed Raza", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(-1), time: "09:50", type: "Follow-up", status: "NO_SHOW", priority: "Routine" }),
-  mkAppt({ mrNumber: "MR-2026-000101", patientName: "Fatima Zahra", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(-2), time: "09:00", type: "New Visit", status: "CANCELLED", priority: "Routine", rejectionReason: "Patient requested reschedule" }),
+  mkAppt({ mrNumber: "MR-2026-000101", patientName: "Fatima Zahra", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(0), time: "09:00", type: "Follow-up", status: "Waiting", priority: "Routine", waitingSince: iso(0, 8, 40) }),
+  mkAppt({ mrNumber: "MR-2026-000104", patientName: "Hassan Ali", doctorId: "doc-3", doctorName: "Dr. Sana Riaz", department: "Pediatrics", date: isoDate(0), time: "09:15", type: "New Visit", status: "In Consultation", priority: "Urgent" }),
+  mkAppt({ mrNumber: "MR-2026-000105", patientName: "Mariam Yousaf", doctorId: "doc-5", doctorName: "Dr. Hina Sheikh", department: "Gynecology", date: isoDate(0), time: "11:00", type: "New Visit", status: "Confirmed", priority: "Routine" }),
+  mkAppt({ mrNumber: "MR-2026-000102", patientName: "Ahmed Raza", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(0), time: "08:30", type: "Follow-up", status: "Done", priority: "Routine" }),
+  mkAppt({ mrNumber: "MR-2026-000106", patientName: "Usman Tariq", doctorId: "doc-2", doctorName: "Dr. Bilal Hassan", department: "Orthopedics", date: isoDate(0), time: "10:20", type: "Consultation", priority: "Urgent", status: "Waiting", waitingSince: iso(0, 9, 5) }),
+  mkAppt({ mrNumber: "MR-2026-000103", patientName: "Zainab Bibi", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(0), time: "09:20", type: "Follow-up", priority: "Emergency", status: "Waiting", waitingSince: iso(0, 8, 20) }),
+  mkAppt({ mrNumber: "MR-2026-000107", patientName: "Ayesha Siddiqui", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(1), time: "09:10", type: "New Visit", status: "Pending Approval", priority: "Routine", reason: "Fever and body ache for 3 days" }),
+  mkAppt({ mrNumber: "MR-2026-000108", patientName: "Imran Khalid", doctorId: "doc-2", doctorName: "Dr. Bilal Hassan", department: "Orthopedics", date: isoDate(1), time: "11:20", type: "Follow-up", status: "Pending Approval", priority: "Routine", reason: "Knee pain follow-up" }),
+  mkAppt({ mrNumber: "MR-2026-000102", patientName: "Ahmed Raza", doctorId: "doc-4", doctorName: "Dr. Omar Farooq", department: "General Medicine", date: isoDate(-1), time: "09:50", type: "Follow-up", status: "No-show", priority: "Routine" }),
+  mkAppt({ mrNumber: "MR-2026-000101", patientName: "Fatima Zahra", doctorId: "doc-1", doctorName: "Dr. Ayesha Malik", department: "Cardiology", date: isoDate(-2), time: "09:00", type: "New Visit", status: "Cancelled", priority: "Routine", rejectionReason: "Patient requested reschedule" }),
 ]
 
 export const CONSULTATIONS: Consultation[] = []
@@ -58,7 +58,7 @@ const mkLab = (partial: Omit<LabOrder, "id">): LabOrder => {
   return {
     ...partial,
     orderNumber: partial.orderNumber ?? `LAB-${today.getFullYear()}-${String(labId).padStart(6, "0")}`,
-    sampleCollectedAt: partial.sampleCollectedAt ?? (partial.status === "Ordered" || partial.status === "Cancelled" ? null : partial.orderDate),
+    sampleCollectedAt: partial.sampleCollectedAt ?? (partial.status === "Ordered" || partial.status === "Cancelled" ? undefined : partial.orderDate),
     id: `LAB-${1000 + labId}`,
   }
 }

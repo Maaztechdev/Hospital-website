@@ -18,7 +18,7 @@ import { AddAdmissionDepositModal } from "@/dashboard/components/ward/AddAdmissi
 import { OT_STATUS_META } from "@/dashboard/pages/ot/otStatusMeta"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
-import { api, openAuthenticatedPrintWindow, toPatient, toSurgery, type ApiPatientClinicalSummary, type ApiPatientProfileData } from "@/lib/api"
+import { api, openAuthenticatedPrintWindow, toAppointment, toPatient, toSurgery, type ApiPatientClinicalSummary, type ApiPatientProfileData } from "@/lib/api"
 
 const TABS = ["Overview", "Timeline", "Visits", "Prescriptions", "Lab Reports", "Ultrasound History", "Pharmacy", "Billing", "Admissions", "OT"]
 
@@ -110,7 +110,7 @@ export default function PatientProfile() {
     ...profileData.labOrders.map((order) => ({
       id: order.id, stage: "Lab Order", datetime: order.orderedAt,
       department: "Laboratory", staff: order.doctor?.user.name ?? "Not recorded",
-      status: order.status, details: order.test.testName,
+      status: order.status, details: order.test?.testName ?? "Not recorded",
     })),
     ...profileData.ultrasoundOrders.map((order) => ({
       id: order.id, stage: "Ultrasound", datetime: order.createdAt,
@@ -137,7 +137,7 @@ export default function PatientProfile() {
     setStartingConsultation(true)
     try {
       const started = await api.startConsultation(eligibleAppointment.id)
-      dispatch({ type: "UPDATE_APPOINTMENT_STATUS", id: started.id, status: started.status })
+      dispatch({ type: "UPDATE_APPOINTMENT_STATUS", id: started.id, status: toAppointment(started).status })
       navigate(`/dashboard/doctor/consultation/${started.id}?mr=${encodeURIComponent(patient!.mrNumber)}`)
     } catch (cause) {
       setProfileError(cause instanceof Error ? cause.message : "Unable to start the selected appointment.")
@@ -335,7 +335,7 @@ export default function PatientProfile() {
                 {patientLab.map((l) => (
                   <li key={l.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--cp-border)] p-3">
                     <div>
-                      <p className="text-sm font-semibold text-[var(--cp-ink)]">{l.test.testName}</p>
+                      <p className="text-sm font-semibold text-[var(--cp-ink)]">{l.test?.testName ?? "Not recorded"}</p>
                       <p className="text-xs text-[var(--cp-ink-soft)]">{formatDate(l.orderedAt)} · Ordered by {l.doctor?.user.name ?? "Not recorded"}</p>
                     </div>
                     <StatusBadge status={l.status} />
@@ -370,7 +370,7 @@ export default function PatientProfile() {
               ? <p className="text-sm text-[var(--cp-ink-soft)]">No pharmacy sales are linked to this patient.</p>
               : <ul className="flex flex-col gap-2">{patientInvoices.flatMap((invoice) => {
                 const sale = invoice.pharmacySale
-                return sale ? sale.items.map((item) => <li key={item.id} className="rounded-lg border border-[var(--cp-border)] p-3"><p className="text-sm font-semibold text-[var(--cp-ink)]">{item.medicine.name} · {item.quantity} dispensed</p><p className="text-xs text-[var(--cp-ink-soft)]">{formatDate(sale.createdAt)} · Invoice {invoice.invoiceNumber}</p></li>) : []
+                return sale ? sale.items.map((item) => <li key={item.id} className="rounded-lg border border-[var(--cp-border)] p-3"><p className="text-sm font-semibold text-[var(--cp-ink)]">{item.medicine.name} · {item.quantity} dispensed</p><p className="text-xs text-[var(--cp-ink-soft)]">{formatDate(sale.createdAt ?? invoice.createdAt)} · Invoice {invoice.invoiceNumber}</p></li>) : []
               })}</ul>}
           </CardContent></Card>
         )}
