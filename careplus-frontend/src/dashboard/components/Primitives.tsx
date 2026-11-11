@@ -14,7 +14,7 @@ export function EmptyState({
 }: {
   icon?: LucideIcon
   title?: string
-  description?: string
+  description?: React.ReactNode
   action?: React.ReactNode
 }) {
   return (
@@ -138,7 +138,7 @@ export function Modal({
   open: boolean
   onClose: () => void
   title: string
-  description?: string
+  description?: React.ReactNode
   children: React.ReactNode
   footer?: React.ReactNode
   className?: string
@@ -260,16 +260,20 @@ export function ConfirmDialog({
   requireReason,
   reasonLabel = "Reason",
   reasonPlaceholder = "Add a short reason…",
+  confirmDisabled = false,
+  children,
 }: {
   open: boolean
   onClose: () => void
   onConfirm: (reason?: string) => void
   title: string
   description: string
-  confirmLabel?: string
+  confirmLabel?: React.ReactNode
   destructive?: boolean
   requireReason?: boolean
   reasonLabel?: string
+  confirmDisabled?: boolean
+  children?: React.ReactNode
   reasonPlaceholder?: string
 }) {
   const [reason, setReason] = React.useState("")
@@ -280,7 +284,7 @@ export function ConfirmDialog({
 
   if (!open) return null
 
-  const disabled = requireReason && reason.trim().length === 0
+  const disabled = confirmDisabled || (requireReason && reason.trim().length === 0)
 
   return (
     <Modal open={open} onClose={onClose} title={title} size="sm">
@@ -293,6 +297,7 @@ export function ConfirmDialog({
           )}
           <p className="text-sm text-[var(--cp-ink-soft)]">{description}</p>
         </div>
+        {children}
         {requireReason && (
           <div>
             <label className="mb-1.5 block text-sm font-medium text-[var(--cp-ink)]">{reasonLabel}</label>

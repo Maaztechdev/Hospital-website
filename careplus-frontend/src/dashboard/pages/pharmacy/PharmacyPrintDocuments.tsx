@@ -2,7 +2,7 @@ import * as React from "react"
 import { apiAssetUrl, useHospitalProfile } from "@/lib/hospitalProfile"
 import { formatCurrency, formatDate, formatDateTime } from "@/dashboard/lib/format"
 import type { ApiPharmacySale, ApiPharmacySettings, ApiPrescription } from "@/lib/api"
-import { describeFrequency } from "../../../../../careplus-backend/src/common/validation/prescription"
+import { describeFrequency } from "@/lib/prescriptionFrequency"
 
 export type PrintLayout = "a4" | "receipt"
 
@@ -36,7 +36,7 @@ export function InvoicePrintDocument({ sale, layout, pharmacySettings }: { sale:
       <PrintField label="Date" value={formatDateTime(sale.invoice.createdAt ?? new Date().toISOString())} />
       <PrintField label="Customer / patient" value={sale.customerName ?? (sale.invoice.patient ? `${sale.invoice.patient.firstName} ${sale.invoice.patient.lastName}`.trim() : "Walk-in")} />
       <PrintField label="Payment method" value={sale.paymentMethod.replaceAll("_", " ")} />
-      <PrintField label="Cashier" value={sale.cashier.name} />
+      <PrintField label="Cashier" value={sale.cashier?.name ?? "Not recorded"} />
     </section>
     <table className="pharmacy-print-table"><thead><tr><th>Item / batch</th><th className="number">Qty</th><th className="number">Unit price</th><th className="number">Amount</th></tr></thead><tbody>
       {sale.items.map((item) => <tr key={item.id}><td>{item.medicine.name}<small>Batch {item.batch.batchNumber} · Exp {formatDate(item.batch.expiryDate)}</small></td><td className="number">{item.quantity}</td><td className="number">{formatCurrency(Number(item.unitPrice))}</td><td className="number">{formatCurrency(Number(item.subtotal))}</td></tr>)}

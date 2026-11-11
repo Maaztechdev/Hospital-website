@@ -1,0 +1,10 @@
+[build]
+  base = "careplus-frontend"
+  command = "npm ci --include=dev && npm run build"
+  publish = "dist"
+
+# Serve React routes when opened directly or refreshed.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

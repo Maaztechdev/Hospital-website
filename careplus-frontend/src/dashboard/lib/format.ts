@@ -159,3 +159,21 @@ export function isValidCNIC(cnic: string): boolean {
   if (!cnic) return true
   return /^\d{5}-\d{7}-\d{1}$/.test(formatPakistaniCNIC(cnic))
 }
+
+export function formatTime(value: string): string {
+  if (/^\d{2}:\d{2}$/.test(value)) return value
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: HOSPITAL_TIMEZONE })
+}
+
+export function getLocalDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+export function formatWeekday(dateKey: string): string {
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][weekdayIndexForDateKey(dateKey)] ?? ""
+}
+
+export function formatStaffDisplayName(name: string, role: string): string {
+  return role.toLowerCase() === "doctor" && !/^dr\.?\s/i.test(name) ? `Dr. ${name}` : name
+}

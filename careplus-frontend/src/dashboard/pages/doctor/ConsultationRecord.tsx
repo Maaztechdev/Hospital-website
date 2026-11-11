@@ -127,7 +127,7 @@ export default function ConsultationRecord() {
       </CardContent></Card>
 
       <Card><CardContent className="grid gap-5 p-5 sm:grid-cols-2">
-        <section><h3 className="mb-2 font-semibold">Suggested laboratory tests</h3>{(consultation.labOrders ?? []).length ? <ul className="list-disc pl-5 text-sm">{consultation.labOrders?.map((order) => <li key={order.id}>{order.test.testName} · {order.status} · {displayDate(order.orderedAt)}</li>)}</ul> : <p className="text-sm text-[var(--cp-ink-soft)]">None recorded.</p>}</section>
+        <section><h3 className="mb-2 font-semibold">Suggested laboratory tests</h3>{(consultation.labOrders ?? []).length ? <ul className="list-disc pl-5 text-sm">{consultation.labOrders?.map((order) => <li key={order.id}>{order.test?.testName ?? "Not recorded"} · {order.status} · {displayDate(order.orderedAt)}</li>)}</ul> : <p className="text-sm text-[var(--cp-ink-soft)]">None recorded.</p>}</section>
         <section><h3 className="mb-2 font-semibold">Suggested ultrasounds</h3>{(consultation.ultrasoundOrders ?? []).length ? <ul className="list-disc pl-5 text-sm">{consultation.ultrasoundOrders?.map((order) => <li key={order.id}>{order.examType} · {order.status} · {displayDate(order.createdAt)}{order.impression ? ` · ${order.impression}` : ""}</li>)}</ul> : <p className="text-sm text-[var(--cp-ink-soft)]">None recorded.</p>}</section>
       </CardContent></Card>
 

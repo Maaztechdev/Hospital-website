@@ -83,6 +83,7 @@ export interface Appointment {
 }
 
 export interface Doctor {
+  userId?: string
   id: string
   name: string
   department: string
@@ -261,6 +262,8 @@ export type WardType = "General Ward" | "Private Room" | "ICU"
 export type BedStatus = "Available" | "Occupied" | "Reserved" | "Cleaning" | "Maintenance"
 
 export interface Bed {
+  depositPending?: boolean
+  roundDoneToday?: boolean
   id: string
   bedNumber: string
   ward: WardType
@@ -314,7 +317,7 @@ export interface TransferRecord {
   by: string
 }
 
-export type OTStatus = "Scheduled" | "Pre-op" | "In Progress" | "Recovery" | "Completed" | "Cancelled"
+export type OTStatus = "Scheduled" | "Pre-op" | "In Progress" | "Recovery" | "Completed" | "Cancelled" | "Postponed"
 
 export interface ChecklistItem {
   id: string
@@ -330,6 +333,14 @@ export interface OTActivityEntry {
 }
 
 export interface Surgery {
+  assistantSurgeonName?: string
+  priority?: string
+  anesthesiaType?: string
+  intraoperativeNotes?: string
+  outcomeNotes?: string
+  postOpNotes?: string
+  emergencyOverrideReason?: string
+  statusEvents?: Array<{ id: string; status: string; fromStatus?: string; toStatus: string; actorName?: string; createdAt: string; actor?: { name: string }; reason?: string | null }>
   id: string
   mrNumber: string
   patientName: string
