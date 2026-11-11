@@ -16,6 +16,10 @@ const STATUS_TONE: Record<string, SemanticTone> = {
   "No-show": "critical",
   // Lab
   "Ordered": "info",
+  "Scheduled": "info",
+  "In Progress": "accent",
+  "Reported": "warning",
+  "Delivered": "success",
   "Sample Collected": "warning",
   "Processing": "accent",
   "Completed": "success",
@@ -32,6 +36,8 @@ const STATUS_TONE: Record<string, SemanticTone> = {
   // Billing
   "Paid": "success",
   "Partial": "warning",
+  "Refunded": "critical",
+  "Partially Refunded": "warning",
   "Unpaid": "critical",
   "Void": "neutral",
   // Patients / generic
@@ -39,7 +45,8 @@ const STATUS_TONE: Record<string, SemanticTone> = {
   "Inactive": "neutral",
   // Priority
   "Routine": "info",
-  "Urgent": "warning",
+  "Urgent": "critical",
+  "STAT": "critical",
   "Emergency": "critical",
   // Prescription
   "Draft": "warning",

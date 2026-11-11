@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test"
+import { cleanupLifecycleAppointment } from "../../../careplus-backend/tests/helpers/e2e-appointment-cleanup"
 
 const apiBase = process.env.PLAYWRIGHT_API_URL ?? "http://127.0.0.1:4000/api/v1"
 const credentials = {
@@ -8,6 +9,11 @@ const credentials = {
 
 type Session = { accessToken: string; refreshToken: string }
 type Appointment = { id: string; status: string }
+let createdAppointmentId: string | undefined
+
+test.afterAll(async () => {
+  if (createdAppointmentId) await cleanupLifecycleAppointment(createdAppointmentId)
+})
 
 async function login(request: APIRequestContext, role: keyof typeof credentials): Promise<Session> {
   const response = await request.post(`${apiBase}/auth/login`, { data: credentials[role] })
@@ -49,21 +55,28 @@ test("appointment lifecycle completes across receptionist and doctor roles", asy
   }
   expect(slots.length).toBeGreaterThan(0)
 
+  const booking = {
+    fullName: `Lifecycle E2E ${Date.now()}`,
+    phone: `0300${String(Date.now()).slice(-7)}`,
+    age: 32,
+    doctorId: selectedDoctor.id,
+    departmentId: selectedDoctor.department.id,
+    appointmentDate,
+    timeSlot: slots[0],
+    reason: "Lifecycle status workflow test",
+  }
+  const missingGenderResponse = await request.post(`${apiBase}/appointments/public`, { data: booking })
+  expect(missingGenderResponse.status()).toBe(400)
+  expect((await missingGenderResponse.json()).errors).toMatchObject({ gender: ["Select your gender"] })
+
   const createResponse = await request.post(`${apiBase}/appointments/public`, {
-    data: {
-      fullName: `Lifecycle E2E ${Date.now()}`,
-      phone: `0300${String(Date.now()).slice(-7)}`,
-      age: 32,
-      doctorId: selectedDoctor.id,
-      departmentId: selectedDoctor.department.id,
-      appointmentDate,
-      timeSlot: slots[0],
-      reason: "Lifecycle status workflow test",
-    },
+    data: { ...booking, gender: "OTHER" },
   })
   const createBody = await createResponse.json()
+  const created = createBody.data as Appointment | undefined
+  if (created?.id) createdAppointmentId = created.id
   expect(createResponse.ok(), JSON.stringify(createBody)).toBeTruthy()
-  const created = createBody.data as Appointment
+  if (!created) throw new Error("Appointment creation returned no appointment")
   expect(created.status).toBe("PENDING_APPROVAL")
   expect((await getAppointment(request, created.id, receptionist.accessToken)).status).toBe("PENDING_APPROVAL")
 

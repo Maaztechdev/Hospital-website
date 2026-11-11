@@ -1,13 +1,28 @@
 import { NavLink } from "react-router-dom"
-import { ChevronsLeft, ChevronsRight, Cross, X } from "lucide-react"
+import { BarChart3, ChevronsLeft, ChevronsRight, Cross, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { NAV_BY_ROLE } from "@/dashboard/nav"
 import { useHospitalProfile } from "@/lib/hospitalProfile"
+import { can } from "@/dashboard/permissions"
 
 function SidebarContent({ collapsed }: { collapsed: boolean }) {
   const { currentUser } = useDashboard()
-  const items = currentUser ? NAV_BY_ROLE[currentUser.role] : []
+  let items = currentUser ? [...NAV_BY_ROLE[currentUser.role]] : []
+
+  if (currentUser) {
+    items = items.filter((item) => {
+      if (item.path.startsWith("/dashboard/ward")) return can(currentUser.role, "ward", "view")
+      if (item.path.startsWith("/dashboard/billing")) return can(currentUser.role, "billing", "view")
+      if (item.path.startsWith("/dashboard/reports")) return can(currentUser.role, "reports", "view")
+      if (item.path.startsWith("/dashboard/patients")) return can(currentUser.role, "patients", "view")
+      return true
+    })
+
+    if (can(currentUser.role, "reports", "view") && !items.some((i) => i.path === "/dashboard/reports")) {
+      items.push({ label: "Reports", path: "/dashboard/reports", icon: BarChart3 })
+    }
+  }
 
   return (
     <nav className="no-scrollbar flex flex-1 flex-col gap-1 overflow-y-auto px-2 py-4">

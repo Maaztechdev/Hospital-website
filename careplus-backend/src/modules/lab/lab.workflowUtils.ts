@@ -8,8 +8,8 @@ export function canTransitionLabSampleStatus(current: LabOrderStatus, next: LabS
   return current === "ORDERED" || current === "SAMPLE_COLLECTED" || current === "PROCESSING";
 }
 
-export function canVerifyLabResult(enteredBy: string | null, verifiedBy: string, allowSameUser: boolean) {
-  return allowSameUser || (enteredBy != null && enteredBy !== verifiedBy);
+export function canVerifyLabResult(enteredBy: string | null, verifiedBy: string, allowSameUser: boolean, isVerifierAdmin: boolean = false) {
+  return allowSameUser || isVerifierAdmin || (enteredBy != null && enteredBy !== verifiedBy);
 }
 
 export function isLabPaymentSatisfied(requirePayment: boolean, balanceAmount: number) {

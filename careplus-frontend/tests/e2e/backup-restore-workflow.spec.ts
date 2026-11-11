@@ -10,7 +10,7 @@ test("backup can be created and downloaded, while invalid restore password is re
   expect(backup.status).toBe("SUCCESS")
   const download = await request.get(`${apiBase}/admin/backup/${backup.id}/download`, { headers })
   expect(download.ok()).toBeTruthy()
-  expect(download.headers()["content-type"]).toContain("sql")
+  expect(download.headers()["content-type"]).toMatch(/gzip|tar/i)
   expect((await request.post(`${apiBase}/admin/backup/${backup.id}/restore`, { headers, data: { password: "wrong-password" } })).status()).toBe(401)
   await openDashboard(page, session, "/dashboard/admin/backup")
   await expect(page.getByRole("heading", { name: "Backup & Restore" })).toBeVisible()

@@ -147,7 +147,7 @@ export const wardRoundsService = {
         orderBy: { orderedAt: "desc" },
       }),
       prisma.ultrasoundOrder.findMany({
-        where: { patientId: admission.patientId, status: { notIn: ["COMPLETED", "CANCELLED"] } },
+        where: { patientId: admission.patientId, status: { notIn: ["REPORTED", "VERIFIED", "DELIVERED", "CANCELLED"] } },
         select: { id: true, examType: true, status: true, createdAt: true },
         orderBy: { createdAt: "desc" },
       }),

@@ -22,7 +22,7 @@ test("billing mutations persist after reload and match backend records", async (
     sessionStorage.setItem("careplus.refreshToken", tokens.refreshToken)
   }, session)
   await page.goto("/dashboard/billing")
-  await expect(page.getByRole("heading", { name: "Billing", exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "All billing", exact: true })).toBeVisible()
 
   await page.getByRole("button", { name: "New Invoice" }).click()
   const createDialog = page.getByRole("dialog")
@@ -77,10 +77,11 @@ test("billing mutations persist after reload and match backend records", async (
   expect(voided.status).toBe("VOID")
   expect(Number(voided.paidAmount)).toBe(40)
   expect(voided.voidReason).toBe("Round trip test cleanup")
-  expect(voided.payments).toHaveLength(0)
+  expect(voided.payments).toHaveLength(1)
+  expect(voided.payments[0].reversed).toBe(true)
 
   await page.reload()
   await expect(page.getByText("Void", { exact: true }).first()).toBeVisible()
   await expect(page.getByText(/Reason: Round trip test cleanup/)).toBeVisible()
-  await expect(page.getByText("No payments recorded yet.", { exact: true })).toBeVisible()
+  await expect(page.getByText("Reversed", { exact: true })).toBeVisible()
 })

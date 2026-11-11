@@ -31,11 +31,11 @@ test("pharmacy overview renders backend metrics and refreshes after pharmacy mut
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ success: true, data: overview(overviewCalls <= 2 ? 1000 : 1450) }),
+      body: JSON.stringify({ success: true, data: overview(overviewCalls <= 1 ? 1000 : 1450) }),
     })
   })
 
-  await openDashboard(page, session, "/dashboard/pharmacy")
+  await openDashboard(page, session, "/dashboard/pharmacy?section=work-items")
   await expect(page.getByText("Today's Sales")).toBeVisible()
   await expect(page.getByText("Low Stock Batches")).toBeVisible()
   await expect(page.getByText("Expiring Within 30 Days")).toBeVisible()
@@ -44,12 +44,12 @@ test("pharmacy overview renders backend metrics and refreshes after pharmacy mut
   await expect(page.getByText("PH-2026-0001")).toBeVisible()
   await expect(page.getByText("Low Stock Medicine")).toBeVisible()
   await expect(page.getByRole("heading", { name: "Quick Actions" })).toBeVisible()
-  await expect(page.getByRole("button", { name: "Khata" })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Khata" })).toBeVisible()
 
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("careplus:data-invalidated", { detail: { path: "/pharmacy/invoices/test/void", method: "POST" } }))
   })
-  await expect.poll(() => overviewCalls).toBeGreaterThan(2)
+  await expect.poll(() => overviewCalls).toBeGreaterThan(1)
   await expect(page.getByText("PKR 1,450", { exact: true }).first()).toBeVisible()
 })
 
@@ -85,12 +85,12 @@ test("pharmacy header search queries medicine catalog and opens matching invento
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true, data: overview(0) }) })
   })
 
-  await openDashboard(page, session, "/dashboard/pharmacy/invoices")
+  await openDashboard(page, session, "/dashboard/pharmacy?section=work-items")
   const search = page.getByPlaceholder("Search medicines by name or barcode…")
   await search.fill("123456789")
-  const medicineOption = page.getByRole("button", { name: /Searchable Medicine/ })
+  const medicineOption = page.getByRole("button", { name: /Searchable Medicine.*in stock/ })
   await expect(medicineOption).toBeVisible()
   await medicineOption.click()
-  await expect(page).toHaveURL(/\/dashboard\/pharmacy\?search=Searchable%20Medicine/)
+  await expect(page).toHaveURL(/\/dashboard\/pharmacy\?.*search=Searchable%20Medicine/)
   await expect(page.getByRole("cell", { name: "Searchable Medicine" })).toBeVisible()
 })

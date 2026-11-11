@@ -7,6 +7,7 @@ import { requireRole } from "@common/middleware/requireRole";
 import { validate } from "@common/middleware/validate";
 import { asyncHandler } from "@common/utils/asyncHandler";
 import { sendSuccess } from "@common/utils/apiResponse";
+import { aggregatePaymentTotals } from "@modules/billing/billing.service";
 
 const dateRangeSchema = z.object({
   from: z.string().date().optional(),
@@ -44,27 +45,95 @@ function rangeFilter(from?: string, to?: string) {
 const reportsService = {
   async revenueSummary(from?: string, to?: string) {
     const createdAt = rangeFilter(from, to);
-    const invoices = await prisma.invoice.findMany({
-      where: { status: { not: "VOID" }, ...(createdAt ? { createdAt } : {}) },
-      select: { grandTotal: true, paidAmount: true, balanceAmount: true, status: true },
-    });
-    const totalBilled = invoices.reduce((s, i) => s + Number(i.grandTotal), 0);
-    const totalCollected = invoices.reduce((s, i) => s + Number(i.paidAmount), 0);
-    const totalOutstanding = invoices.reduce((s, i) => s + Number(i.balanceAmount), 0);
-    return { invoiceCount: invoices.length, totalBilled, totalCollected, totalOutstanding };
+    const paymentDate = rangeFilter(from, to);
+    const invoiceWhere = { status: { not: "VOID" as const }, ...(createdAt ? { createdAt } : {}) };
+    const [invoiceTotals, invoiceCount, paymentsGross, refundsGross, statusRows, categoryRows] = await Promise.all([
+      prisma.invoice.aggregate({
+        where: invoiceWhere,
+        _sum: { grandTotal: true, balanceAmount: true },
+      }),
+      prisma.invoice.count({ where: invoiceWhere }),
+      prisma.payment.aggregate({
+        where: {
+          type: "PAYMENT",
+          deletedAt: null,
+          ...(paymentDate ? { paymentDate } : {}),
+          invoice: { status: { not: "VOID" } },
+        },
+        _sum: { amount: true },
+      }),
+      prisma.payment.aggregate({
+        where: {
+          type: "REFUND",
+          deletedAt: null,
+          ...(paymentDate ? { paymentDate } : {}),
+          invoice: { status: { not: "VOID" } },
+        },
+        _sum: { amount: true },
+      }),
+      prisma.invoice.groupBy({
+        by: ["status"],
+        where: { status: { not: "VOID" } },
+        _count: { _all: true },
+      }),
+      prisma.invoiceItem.groupBy({
+        by: ["itemType"],
+        where: { invoice: { status: { not: "VOID" } } },
+        _sum: { subtotal: true },
+      }),
+    ]);
+    const totalInvoiced = Number(invoiceTotals._sum.grandTotal ?? 0);
+    const countFor = (status: string) => statusRows.find((row) => row.status === status)?._count._all ?? 0;
+    const categoryTotal = (itemType: string) => Number(categoryRows.find((row) => row.itemType === itemType)?._sum.subtotal ?? 0);
+    const paymentTotals = aggregatePaymentTotals([
+      { type: "PAYMENT", amount: paymentsGross._sum.amount ?? 0 },
+      { type: "REFUND", amount: refundsGross._sum.amount ?? 0 },
+    ]);
+    return {
+      invoiceCount,
+      totalBilled: totalInvoiced,
+      totalInvoiced,
+      totalCollected: paymentTotals.netNumber,
+      grossCollected: paymentTotals.grossNumber,
+      refundsTotal: paymentTotals.refundsNumber,
+      totalOutstanding: Number(invoiceTotals._sum.balanceAmount ?? 0),
+      allTime: {
+        paidInvoices: countFor("PAID"),
+        partialInvoices: countFor("PARTIAL"),
+        unpaidInvoices: countFor("UNPAID") + countFor("FINALIZED") + countFor("DRAFT"),
+        wardCharges: categoryTotal("WARD"),
+        labRevenue: categoryTotal("LAB"),
+        pharmacyRevenue: categoryTotal("MEDICINE"),
+      },
+    };
   },
   async revenueTrend(from: string, to: string) {
-    const payments = await prisma.payment.findMany({
-      where: { deletedAt: null, paymentDate: rangeFilter(from, to) },
-      select: { paymentDate: true, amount: true },
-      orderBy: { paymentDate: "asc" },
-    });
-    const totals = new Map<string, number>();
-    for (const payment of payments) {
-      const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(payment.paymentDate);
-      totals.set(day, (totals.get(day) ?? 0) + Number(payment.amount));
-    }
-    const points: Array<{ label: string; value: number }> = [];
+    const rangeStart = new Date(`${from}T00:00:00+05:00`);
+    const rangeEnd = new Date(`${addCalendarDays(to, 1)}T00:00:00+05:00`);
+    const [collectedRows, invoicedRows] = await Promise.all([
+      prisma.$queryRaw<Array<{ day: string; amount: Prisma.Decimal }>>(Prisma.sql`
+        SELECT timezone('Asia/Karachi', p.payment_date)::date::text AS day,
+               SUM(CASE WHEN p.type::text = 'REFUND' THEN -p.amount ELSE p.amount END) AS amount
+        FROM payments p
+        INNER JOIN invoices i ON i.id = p.invoice_id
+        WHERE p.deleted_at IS NULL
+          AND i.status <> 'VOID'
+          AND p.payment_date >= ${rangeStart}
+          AND p.payment_date < ${rangeEnd}
+        GROUP BY timezone('Asia/Karachi', p.payment_date)::date
+      `),
+      prisma.$queryRaw<Array<{ day: string; amount: Prisma.Decimal }>>(Prisma.sql`
+        SELECT timezone('Asia/Karachi', i.created_at)::date::text AS day, SUM(i.grand_total) AS amount
+        FROM invoices i
+        WHERE i.status <> 'VOID'
+          AND i.created_at >= ${rangeStart}
+          AND i.created_at < ${rangeEnd}
+        GROUP BY timezone('Asia/Karachi', i.created_at)::date
+      `),
+    ]);
+    const collectedByDay = new Map(collectedRows.map((row) => [row.day, Number(row.amount)]));
+    const invoicedByDay = new Map(invoicedRows.map((row) => [row.day, Number(row.amount)]));
+    const points: Array<{ label: string; collected: number; invoiced: number }> = [];
     const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const weekdayIndex = (dateKey: string) => {
       const [yearValue, month, day] = dateKey.split("-").map(Number);
@@ -73,7 +142,11 @@ const reportsService = {
       return (year + Math.floor(year / 4) - Math.floor(year / 100) + Math.floor(year / 400) + offsets[month - 1] + day) % 7;
     };
     for (let key = from; key <= to; key = addCalendarDays(key, 1)) {
-      points.push({ label: weekdayNames[weekdayIndex(key)], value: totals.get(key) ?? 0 });
+      points.push({
+        label: weekdayNames[weekdayIndex(key)],
+        collected: collectedByDay.get(key) ?? 0,
+        invoiced: invoicedByDay.get(key) ?? 0,
+      });
     }
     return points;
   },

@@ -1,10 +1,16 @@
 import { PrismaClient } from "@prisma/client";
 import argon2 from "argon2";
 import { generateNextAppointmentToken } from "../src/common/utils/sequenceGenerators";
+import { ultrasoundTemplateDefaults } from "../src/modules/ultrasound/ultrasoundTemplateDefaults";
+import { DEFAULT_NOTIFICATION_TEMPLATES } from "../src/common/constants/notificationTemplates";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  if (process.env.NODE_ENV === "production") {
+    console.error("❌ Refusing to run demo seed in production (NODE_ENV=production).");
+    throw new Error("Demo seed must not be run in production environment");
+  }
   console.log("🌱 Seeding CarePlus database...");
 
   // ── Departments ────────────────────────────────────────
@@ -41,14 +47,19 @@ async function main() {
     update: {},
   });
 
-  // ── Receptionist, Pharmacist, Lab Tech, Nurse ──────────
+  // ── Receptionist, Pharmacist, Lab Tech, Nurse, Billing Manager ──────────
   const staffPasswordHash = await argon2.hash("Staff@12345");
-  const [receptionist, pharmacist, labTech, nurse, ultrasoundTech] = await Promise.all([
+  const billingPasswordHash = await argon2.hash("Billing@12345");
+  const [receptionist, pharmacist, labTech, nurse, ultrasoundTech, billingManager, pathologist, radiologist, ultrasoundTechnician] = await Promise.all([
     prisma.user.upsert({ where: { email: "reception@careplus.local" }, create: { name: "Ayesha Front Desk", email: "reception@careplus.local", passwordHash: staffPasswordHash, role: "RECEPTIONIST" }, update: {} }),
     prisma.user.upsert({ where: { email: "pharmacist@careplus.local" }, create: { name: "Bilal Pharmacist", email: "pharmacist@careplus.local", passwordHash: staffPasswordHash, role: "PHARMACIST" }, update: {} }),
     prisma.user.upsert({ where: { email: "labtech@careplus.local" }, create: { name: "Sana Lab Tech", email: "labtech@careplus.local", passwordHash: staffPasswordHash, role: "LAB_TECHNICIAN" }, update: {} }),
     prisma.user.upsert({ where: { email: "nurse@careplus.local" }, create: { name: "Hina Nurse", email: "nurse@careplus.local", passwordHash: staffPasswordHash, role: "NURSE" }, update: {} }),
     prisma.user.upsert({ where: { email: "ultrasoundtech@careplus.local" }, create: { name: "Hassan Ultrasound Tech", email: "ultrasoundtech@careplus.local", passwordHash: staffPasswordHash, role: "ULTRASOUND_TECH" }, update: {} }),
+    prisma.user.upsert({ where: { email: "billing-manager@careplus.local" }, create: { name: "Tariq Billing Manager", email: "billing-manager@careplus.local", passwordHash: billingPasswordHash, role: "BILLING_MANAGER" }, update: {} }),
+    prisma.user.upsert({ where: { email: "pathologist@careplus.local" }, create: { name: "Dr. Farooq Pathologist", email: "pathologist@careplus.local", passwordHash: staffPasswordHash, role: "PATHOLOGIST" }, update: {} }),
+    prisma.user.upsert({ where: { email: "radiologist@careplus.local" }, create: { name: "Dr. Noman Radiologist", email: "radiologist@careplus.local", passwordHash: staffPasswordHash, role: "RADIOLOGIST" }, update: {} }),
+    prisma.user.upsert({ where: { email: "ultrasoundtechnician@careplus.local" }, create: { name: "Ali Ultrasound Technician", email: "ultrasoundtechnician@careplus.local", passwordHash: staffPasswordHash, role: "ULTRASOUND_TECHNICIAN" }, update: {} }),
   ]);
 
   // ── Doctors ────────────────────────────────────────────
@@ -74,10 +85,10 @@ async function main() {
       experienceYears: 8, 
       consultationFee: 1500,
       scheduleJson: {
-        workingHours: { start: "09:00", end: "17:00" },
+        workingHours: { start: "08:00", end: "23:59" },
         slotDuration: 20,
-        daysOff: ["Saturday", "Sunday"],
-        slotsPerDay: ["09:00", "09:20", "09:40", "10:00", "10:20", "10:40", "11:00", "11:20", "11:40", "12:00", "14:00", "14:20", "14:40", "15:00", "15:20", "15:40", "16:00", "16:20", "16:40"]
+        daysOff: [],
+        slotsPerDay: ["08:00", "08:20", "08:40", "09:00", "09:20", "09:40", "10:00", "10:20", "10:40", "11:00", "11:20", "11:40", "12:00", "12:20", "12:40", "13:00", "13:20", "13:40", "14:00", "14:20", "14:40", "15:00", "15:20", "15:40", "16:00", "16:20", "16:40", "17:00", "17:20", "17:40", "18:00", "18:20", "18:40", "19:00", "19:20", "19:40", "20:00", "20:20", "20:40", "21:00", "21:20", "21:40", "22:00", "22:20", "22:40", "23:00", "23:20", "23:40"]
       }
     },
     update: {},
@@ -92,10 +103,10 @@ async function main() {
       experienceYears: 12, 
       consultationFee: 3000,
       scheduleJson: {
-        workingHours: { start: "10:00", end: "16:00" },
+        workingHours: { start: "08:00", end: "23:59" },
         slotDuration: 20,
-        daysOff: ["Friday", "Saturday", "Sunday"],
-        slotsPerDay: ["10:00", "10:20", "10:40", "11:00", "11:20", "11:40", "12:00", "12:20", "12:40", "14:00", "14:20", "14:40", "15:00", "15:20", "15:40"]
+        daysOff: [],
+        slotsPerDay: ["08:00", "08:20", "08:40", "09:00", "09:20", "09:40", "10:00", "10:20", "10:40", "11:00", "11:20", "11:40", "12:00", "12:20", "12:40", "13:00", "13:20", "13:40", "14:00", "14:20", "14:40", "15:00", "15:20", "15:40", "16:00", "16:20", "16:40", "17:00", "17:20", "17:40", "18:00", "18:20", "18:40", "19:00", "19:20", "19:40", "20:00", "20:20", "20:40", "21:00", "21:20", "21:40", "22:00", "22:20", "22:40", "23:00", "23:20", "23:40"]
       }
     },
     update: {},
@@ -115,6 +126,13 @@ async function main() {
     update: {},
   });
 
+  const currentYear = new Date().getFullYear();
+  await prisma.mrNumberSequence.upsert({
+    where: { year: currentYear },
+    create: { year: currentYear, counter: 1 },
+    update: { counter: { increment: 1 } },
+  });
+
   const seededAppointmentDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const [existingSeededAppointment] = await prisma.$queryRaw<Array<{ id: string }>>`
     SELECT id FROM appointments
@@ -128,14 +146,22 @@ async function main() {
       const tokenNumber = await generateNextAppointmentToken(tx, doctor1.id, seededAppointmentDate);
       await tx.$executeRaw`
         INSERT INTO appointments (
-          patient_id, doctor_id, department_id, appointment_date, time_slot, token_number,
-          appointment_type, status, priority, source, created_by, created_at, updated_at
+          id, patient_id, doctor_id, department_id, appointment_date, time_slot, token_number,
+          appointment_type, status, priority, source, gender, created_by, created_at, updated_at
         ) VALUES (
-          ${demoPatient.id}, ${doctor1.id}, ${departments[0].id}, ${seededAppointmentDate}::date,
+          gen_random_uuid()::text, ${demoPatient.id}, ${doctor1.id}, ${departments[0].id}, ${seededAppointmentDate}::date,
           '09:00'::time, ${tokenNumber}, 'CONSULTATION'::"AppointmentType", 'CONFIRMED'::"AppointmentStatus",
-          'ROUTINE'::"Priority", 'WALK_IN'::"AppointmentSource", ${receptionist.id}, NOW(), NOW()
+          'ROUTINE'::"Priority", 'WALK_IN'::"AppointmentSource", ${demoPatient.gender}::"Gender", ${receptionist.id}, NOW(), NOW()
         )
       `;
+    });
+  }
+
+  for (const template of ultrasoundTemplateDefaults) {
+    await prisma.ultrasoundReportTemplate.upsert({
+      where: { examinationType: template.examinationType },
+      create: { ...template, isActive: true },
+      update: {},
     });
   }
 
@@ -215,6 +241,22 @@ async function main() {
     await prisma.otRoom.create({ data: { roomName: "OT-1" } });
   }
 
+  // ── Notification Templates ─────────────────────────────
+  for (const t of DEFAULT_NOTIFICATION_TEMPLATES) {
+    await prisma.notificationTemplate.upsert({
+      where: { notificationType: t.notificationType },
+      update: {},
+      create: {
+        notificationType: t.notificationType,
+        name: t.name,
+        titleTemplate: t.titleTemplate,
+        messageTemplate: t.messageTemplate,
+        availablePlaceholders: t.availablePlaceholders,
+        isActive: true,
+      },
+    });
+  }
+
   console.log("✅ Seed complete.");
   console.log("   Admin login:        admin@careplus.local / Admin@12345");
   console.log("   Doctor login:       dr.ahmed@careplus.local / Doctor@12345");
@@ -223,6 +265,7 @@ async function main() {
   console.log("   Lab tech login:     labtech@careplus.local / Staff@12345");
   console.log("   Nurse login:        nurse@careplus.local / Staff@12345");
   console.log("   Ultrasound tech:   ultrasoundtech@careplus.local / Staff@12345");
+  console.log("   Billing Manager:    billing-manager@careplus.local / Billing@12345");
   console.log(`   Departments: ${departments.length}, Doctors: 2 (${doctor1.id}, ${doctor2.id}), Lab tests: ${labTests.length}`);
   void admin;
   void receptionist;
@@ -230,6 +273,7 @@ async function main() {
   void labTech;
   void nurse;
   void ultrasoundTech;
+  void billingManager;
 }
 
 main()

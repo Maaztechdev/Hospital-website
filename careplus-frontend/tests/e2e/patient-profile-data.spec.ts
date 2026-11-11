@@ -82,6 +82,7 @@ test("patient profile shows separate consultations for same-day appointments", a
           appointmentType: "NEW_VISIT",
           source: "WALK_IN",
           reason: `Profile visit ${index + 1}`,
+          feePaid: true,
         },
       })
       expect(appointmentResponse.ok()).toBeTruthy()
@@ -112,10 +113,14 @@ test("patient profile shows separate consultations for same-day appointments", a
     await expect(page.getByText(/Token #\d+ —/)).toHaveCount(2)
     await expect(page.getByText("Profile diagnosis 1", { exact: false })).toBeVisible()
     await expect(page.getByText("Profile diagnosis 2", { exact: false })).toBeVisible()
-    await page.evaluate(async (appointmentId) => {
-      const { api } = await import("/src/lib/api.ts")
-      await api.createConsultation({ appointmentId, diagnosis: "Profile refreshed diagnosis" })
-    }, thirdAppointmentId)
+    const createRes = await request.post(`${apiBase}/consultations`, {
+      headers: doctorHeaders,
+      data: { appointmentId: thirdAppointmentId, diagnosis: "Profile refreshed diagnosis" },
+    })
+    expect(createRes.ok()).toBeTruthy()
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("careplus:data-invalidated", { detail: { path: "/consultations" } }))
+    })
     await expect(page.getByText("Profile refreshed diagnosis", { exact: false })).toBeVisible()
   } finally {
     if (patientId) {

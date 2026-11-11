@@ -6,9 +6,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
-import { api, toAdmission, type ApiAdmission, type ApiConsultation, type ApiDoctorWardRoundToday, type ApiLabTest, type ApiPatientVitals, type ApiWardRound } from "@/lib/api"
+import { api, toAdmission, type ApiAdmission, type ApiConsultation, type ApiDoctorWardRoundToday, type ApiLabTest, type ApiMedicine, type ApiPatientVitals, type ApiWardRound } from "@/lib/api"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { DischargeModal } from "@/dashboard/pages/ward/DischargeModal"
+import { IpdRunningBill } from "@/dashboard/pages/ward/IpdRunningBill"
 import { ScheduleSurgeryModal } from "@/dashboard/pages/ot/ScheduleSurgeryModal"
 import type { Bed } from "@/dashboard/types"
 
@@ -24,6 +25,10 @@ export default function WardRoundPage() {
   const [rounds, setRounds] = useState<ApiWardRound[]>([])
   const [vitals, setVitals] = useState<ApiPatientVitals[]>([])
   const [tests, setTests] = useState<ApiLabTest[]>([])
+  const [wardMedicines, setWardMedicines] = useState<ApiMedicine[]>([])
+  const [wardMedicineId, setWardMedicineId] = useState("")
+  const [wardMedicineQuantity, setWardMedicineQuantity] = useState("1")
+  const [wardMedicineNote, setWardMedicineNote] = useState("")
   const [editableConsultation, setEditableConsultation] = useState<ApiConsultation | null>(null)
   const [testId, setTestId] = useState("")
   const [ultrasound, setUltrasound] = useState("")
@@ -40,11 +45,12 @@ export default function WardRoundPage() {
     setLoading(true)
     setError("")
     try {
-      const [admissionData, roundData, vitalData, testData, todayData, consultationData] = await Promise.all([
+      const [admissionData, roundData, vitalData, testData, medicineData, todayData, consultationData] = await Promise.all([
         api.getAdmission(admissionId),
         api.listWardRounds(admissionId),
         api.listVitalsHistory(admissionId),
         api.listLabTests(),
+        api.listMedicines(),
         api.getMyWardRoundsToday(),
         api.listConsultations(),
       ])
@@ -52,6 +58,7 @@ export default function WardRoundPage() {
       setRounds(roundData)
       setVitals(vitalData)
       setTests(testData.filter((test) => test.isActive))
+      setWardMedicines(medicineData)
       setSummary(todayData.find((item) => item.id === admissionId) ?? null)
       setEditableConsultation(consultationData.find((item) => (
         item.patientId === admissionData.patientId && item.prescriptionStatus === "DRAFT"
@@ -126,7 +133,7 @@ export default function WardRoundPage() {
     if (!admission || !testId) return
     setBusy(true)
     try {
-      await api.createLabOrder({ patientId: admission.patientId, testId })
+      await api.createLabOrder({ patientId: admission.patientId, testId, admissionId: admission.id })
       await load()
       toast({ title: "Lab ordered", description: "The order is now in the patient’s lab queue.", variant: "success" })
     } catch (cause) {
@@ -140,7 +147,7 @@ export default function WardRoundPage() {
     if (!admission || !ultrasound.trim()) return
     setBusy(true)
     try {
-      await api.createUltrasoundOrder({ patientId: admission.patientId, examType: ultrasound.trim() })
+      await api.createUltrasoundOrder({ patientId: admission.patientId, examType: ultrasound.trim(), admissionId: admission.id })
       setUltrasound("")
       await load()
       toast({ title: "Ultrasound ordered", variant: "success" })
@@ -160,6 +167,31 @@ export default function WardRoundPage() {
       toast({ title: ready ? "Marked ready for discharge" : "Discharge readiness removed", variant: "success" })
     } catch (cause) {
       toast({ title: "Unable to update discharge readiness", description: cause instanceof Error ? cause.message : "Please try again.", variant: "error" })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function orderWardMedicine() {
+    if (!admission || !wardMedicineId || !wardMedicineNote.trim()) return
+    const quantity = Number(wardMedicineQuantity)
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      toast({ title: "Invalid medicine quantity", description: "Enter a positive whole number.", variant: "error" })
+      return
+    }
+    setBusy(true)
+    try {
+      await api.createWardMedicineOrder(admission.id, {
+        orderNote: wardMedicineNote.trim(),
+        items: [{ medicineId: wardMedicineId, quantity }],
+      })
+      setWardMedicineId("")
+      setWardMedicineQuantity("1")
+      setWardMedicineNote("")
+      await load()
+      toast({ title: "Ward medicine ordered", description: "Pharmacy can now issue the order using FEFO stock allocation.", variant: "success" })
+    } catch (cause) {
+      toast({ title: "Unable to order ward medicine", description: cause instanceof Error ? cause.message : "Please try again.", variant: "error" })
     } finally {
       setBusy(false)
     }
@@ -190,6 +222,7 @@ export default function WardRoundPage() {
       </div>
 
       {summary?.latestVitals?.isCritical && <div role="alert" className="rounded-lg border border-[var(--cp-critical)] bg-[var(--cp-critical-light)] p-3 text-sm font-semibold text-[var(--cp-critical)]">Critical vitals recorded. Review the latest measurements before proceeding.</div>}
+      <IpdRunningBill admissionId={admission.id} />
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
           <CardHeader><CardTitle>Vitals trend</CardTitle></CardHeader>
@@ -228,6 +261,20 @@ export default function WardRoundPage() {
               <div className="min-w-52 flex-1"><Label htmlFor="ward-round-ultrasound">Order ultrasound</Label><input id="ward-round-ultrasound" className={fieldClass} value={ultrasound} onChange={(event) => setUltrasound(event.target.value)} placeholder="Exam type" /></div>
               <Button size="sm" variant="outline" onClick={() => void orderUltrasound()} disabled={busy || !ultrasound.trim()}>Order ultrasound</Button>
             </div>
+            {(currentUser?.role === "doctor" || currentUser?.role === "nurse") && (
+              <div className="grid gap-2 border-t border-[var(--cp-border)] pt-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
+                <div>
+                  <Label htmlFor="ward-round-medicine">Order medicine to ward</Label>
+                  <select id="ward-round-medicine" className={fieldClass} value={wardMedicineId} onChange={(event) => setWardMedicineId(event.target.value)}>
+                    <option value="">Select a medicine</option>
+                    {wardMedicines.map((medicine) => <option key={medicine.id} value={medicine.id}>{medicine.name}{medicine.strength ? ` · ${medicine.strength}` : ""}</option>)}
+                  </select>
+                </div>
+                <div><Label htmlFor="ward-round-medicine-quantity">Quantity</Label><input id="ward-round-medicine-quantity" className={fieldClass} type="number" min="1" step="1" value={wardMedicineQuantity} onChange={(event) => setWardMedicineQuantity(event.target.value)} /></div>
+                <div className="sm:col-span-2"><Label htmlFor="ward-round-medicine-note">Order note</Label><Textarea id="ward-round-medicine-note" value={wardMedicineNote} onChange={(event) => setWardMedicineNote(event.target.value)} maxLength={500} placeholder="Dose, timing, or clinical instructions" /></div>
+                <Button size="sm" variant="outline" className="w-fit" onClick={() => void orderWardMedicine()} disabled={busy || !wardMedicineId || !wardMedicineNote.trim()}>Place ward medicine order</Button>
+              </div>
+            )}
             <div className="flex flex-wrap gap-2 border-t border-[var(--cp-border)] pt-3">
               {attendingDoctor && editableConsultation ? <Link className="inline-flex items-center rounded-lg border px-3 py-2 text-sm" to={`/dashboard/doctor/consultation/${editableConsultation.appointmentId}`}>Prescribe / modify medicines</Link> : <p className="text-xs text-[var(--cp-ink-soft)]">Prescriptions are consultation-linked. No editable draft consultation is available for this patient; signed prescription content remains locked.</p>}
             </div>

@@ -30,8 +30,8 @@ describe("Appointment status transitions (state machine contract)", () => {
     PENDING_APPROVAL: ["CONFIRMED", "CANCELLED", "EXPIRED"],
     CONFIRMED: ["WAITING", "CANCELLED", "NO_SHOW", "EXPIRED"],
     WAITING: ["IN_CONSULTATION", "CANCELLED", "NO_SHOW", "EXPIRED"],
-    IN_CONSULTATION: ["DONE"],
-    DONE: [],
+    IN_CONSULTATION: ["COMPLETED"],
+    COMPLETED: [],
     CANCELLED: [],
     NO_SHOW: [],
     EXPIRED: [],
@@ -41,12 +41,12 @@ describe("Appointment status transitions (state machine contract)", () => {
     expect(ALLOWED_TRANSITIONS.PENDING_APPROVAL).toContain("CONFIRMED");
   });
 
-  it("disallows DONE -> any other state (terminal)", () => {
-    expect(ALLOWED_TRANSITIONS.DONE).toHaveLength(0);
+  it("disallows COMPLETED -> any other state (terminal)", () => {
+    expect(ALLOWED_TRANSITIONS.COMPLETED).toHaveLength(0);
   });
 
-  it("disallows skipping WAITING -> DONE directly", () => {
-    expect(ALLOWED_TRANSITIONS.WAITING).not.toContain("DONE");
+  it("disallows skipping WAITING -> COMPLETED directly", () => {
+    expect(ALLOWED_TRANSITIONS.WAITING).not.toContain("COMPLETED");
   });
 
   it("allows only approve and reject while pending approval", () => {
@@ -63,7 +63,7 @@ describe("Appointment status transitions (state machine contract)", () => {
 
   it("allows completion only during consultation and no actions after terminal states", () => {
     expect(() => assertAppointmentActionAllowed("IN_CONSULTATION", "COMPLETE")).not.toThrow();
-    for (const status of ["DONE", "CANCELLED", "NO_SHOW", "EXPIRED"] as const) {
+    for (const status of ["COMPLETED", "CANCELLED", "NO_SHOW", "EXPIRED"] as const) {
       expect(() => assertAppointmentActionAllowed(status, "CANCEL")).toThrow(expect.objectContaining({ statusCode: 400 }));
     }
   });

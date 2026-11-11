@@ -13,6 +13,7 @@ import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { useToast } from "@/hooks/use-toast"
 import { api, type ApiPharmacyInvoice, type ApiPharmacySale, type ApiPharmacySettings } from "@/lib/api"
 import { InvoicePrintDocument, type PrintLayout } from "./PharmacyPrintDocuments"
+import { printElement } from "@/lib/print"
 
 const PAGE_SIZE = 20
 
@@ -112,13 +113,9 @@ export default function PharmacyInvoicesPage() {
 
   React.useEffect(() => {
     if (!printing) return
-    const afterPrint = () => setPrinting(false)
-    window.addEventListener("afterprint", afterPrint, { once: true })
-    const frame = window.requestAnimationFrame(() => window.print())
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.removeEventListener("afterprint", afterPrint)
-    }
+    void printElement("pharmacy-print-root", {
+      afterPrint: () => setPrinting(false),
+    }).catch(() => setPrinting(false))
   }, [printing])
 
   const changeFilter = (setter: (value: string) => void) => (value: string) => {

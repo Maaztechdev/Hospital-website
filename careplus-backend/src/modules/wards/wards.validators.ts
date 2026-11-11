@@ -65,6 +65,7 @@ export const admitPatientSchema = z.object({
   dailyRate: z.number().positive().optional(),
   expectedStayDays: z.number().int().min(1).max(365).optional(),
   admissionNotes: z.string().trim().max(5000).optional(),
+  bedRentCutoffTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
 });
 
 export const recordAdmissionDepositSchema = z.object({
@@ -87,6 +88,7 @@ export const dischargeSchema = z.object({
   referral: z.string().trim().optional().default(""),
   instructions: z.string().trim().min(1, "Patient instructions are required"),
   confirmUnpaidBalance: z.boolean().default(false),
+  overrideReason: z.string().trim().optional(),
 });
 
 export const idParamSchema = z.object({ id: z.string().uuid() });

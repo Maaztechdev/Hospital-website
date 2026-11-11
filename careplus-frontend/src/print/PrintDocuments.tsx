@@ -1,7 +1,9 @@
 import * as React from "react"
-import { Route, Routes, useParams } from "react-router-dom"
-import { api, loadAuthenticatedImage, type ApiHospitalProfile, type ApiUser } from "@/lib/api"
+import { Route, Routes, useParams, useSearchParams } from "react-router-dom"
+import { api, loadAuthenticatedImage, type ApiHospitalProfile, type ApiPharmacySale, type ApiUser } from "@/lib/api"
 import { DEFAULT_HOSPITAL_PROFILE } from "@/lib/hospitalProfile"
+import { printElement } from "@/lib/print"
+import { InvoicePrintDocument } from "@/dashboard/pages/pharmacy/PharmacyPrintDocuments"
 
 type PrintContent = {
   printedBy: ApiUser
@@ -17,6 +19,15 @@ function printDate(value?: string | null) {
 function valueOrNotRecorded(value: unknown) {
   if (value === null || value === undefined || String(value).trim() === "") return "Not recorded"
   return String(value)
+}
+
+function formatGender(gender?: string | null): string {
+  if (!gender) return "Not recorded"
+  const upper = gender.toUpperCase()
+  if (upper === "MALE") return "Male"
+  if (upper === "FEMALE") return "Female"
+  if (upper === "OTHER") return "Other"
+  return gender.charAt(0).toUpperCase() + gender.slice(1).toLowerCase()
 }
 
 function usePrintImages(paths: Array<string | null | undefined> | null) {
@@ -52,13 +63,42 @@ function usePrintAfterReady(ready: boolean) {
     }
     if (printed.current) return
     printed.current = true
-    const frame = window.requestAnimationFrame(() => window.print())
-    return () => window.cancelAnimationFrame(frame)
+    void printElement("careplus-print-root").catch(() => {})
   }, [ready])
 }
 
 function Loading({ error }: { error: string | null }) {
-  return <main className="print-loading" role={error ? "alert" : "status"}>{error ?? "Preparing print document…"}</main>
+  return (
+    <main
+      className="flex min-h-[50vh] items-center justify-center bg-[var(--cp-bg,#f8fafc)] p-6 text-center font-sans print:hidden"
+      role={error ? "alert" : "status"}
+    >
+      <div className="w-full max-w-md rounded-2xl border border-[var(--cp-border-soft,#e2e8f0)] bg-white p-6 shadow-sm">
+        {error ? (
+          <>
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
+              <span className="text-xl font-bold">!</span>
+            </div>
+            <h2 className="mb-1 text-base font-semibold text-[var(--cp-ink,#0f172a)]">Print Document Unavailable</h2>
+            <p className="mb-4 text-xs text-[var(--cp-ink-soft,#64748b)]">{error}</p>
+            <button
+              type="button"
+              onClick={() => window.history.back()}
+              className="inline-flex min-h-[40px] items-center justify-center rounded-lg bg-[var(--cp-primary,#1769AA)] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[var(--cp-primary-dark,#0F4C7A)]"
+            >
+              Go Back
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-3 border-[var(--cp-primary,#1769AA)] border-t-transparent" />
+            <h2 className="text-sm font-semibold text-[var(--cp-ink,#0f172a)]">Preparing print document…</h2>
+            <p className="mt-1 text-xs text-[var(--cp-ink-soft,#64748b)]">Please wait while document records are loaded.</p>
+          </>
+        )}
+      </div>
+    </main>
+  )
 }
 
 function DocumentLayout({
@@ -91,7 +131,7 @@ function DocumentLayout({
         <span>Printed {printDate(new Date().toISOString())} · Printed by {printedBy.name}</span>
         <span>Page <span className="careplus-page-number" /></span>
       </footer>
-      <button className="careplus-print-action no-print" onClick={() => window.print()}>Print</button>
+      <button className="careplus-print-action no-print" onClick={() => void printElement("careplus-print-root")}>Print</button>
     </main>
   )
 }
@@ -253,6 +293,89 @@ function DischargePrintPage() {
   )
 }
 
+function IpdBillPrintPage() {
+  const { admissionId = "" } = useParams()
+  const [searchParams] = useSearchParams()
+  const final = searchParams.get("final") === "true"
+  const load = React.useCallback(async () => {
+    const [admission, bill, printedBy, hospital] = await Promise.all([
+      api.getAdmission(admissionId),
+      api.getIpdRunningBill(admissionId),
+      api.me(),
+      api.getHospitalProfile(),
+    ])
+    return { admission, bill, printedBy, hospital: hospital ?? DEFAULT_HOSPITAL_PROFILE }
+  }, [admissionId])
+  const { data, error } = useDocumentData(load)
+  const images = usePrintImages(data ? [data.hospital.logoUrl] : null)
+  usePrintAfterReady(Boolean(data && images))
+  if (error || !data || !images) return <Loading error={error} />
+
+  const { admission, bill } = data
+  const patientName = `${admission.patient.firstName} ${admission.patient.lastName}`.trim()
+  const categories = [
+    ["Bed", bill.categories.bed],
+    ["Medicines", bill.categories.medicines],
+    ["Services", bill.categories.services],
+    ["Tests", bill.categories.tests],
+  ] as const
+  const money = (value: number | string) => Number(value ?? 0).toLocaleString("en-PK", { style: "currency", currency: data.hospital.currency || "PKR" })
+
+  return (
+    <DocumentLayout title={final ? "Final IPD Bill" : "Interim IPD Running Bill"} hospital={data.hospital} logo={images[0]} printedBy={data.printedBy} patientName={patientName} mrNumber={admission.patient.mrNumber}>
+      <PrintSection title="Admission details">
+        <PrintRows rows={[
+          ["Admission date", printDate(admission.admissionDate)],
+          ["Discharge date", printDate(admission.dischargeDate)],
+          ["Ward / room / bed", `${admission.bed.room.ward.wardName} · ${admission.bed.room.roomNumber} · ${admission.bed.bedNumber}`],
+          ["Invoice", bill.invoice.invoiceNumber],
+          ["Status", bill.invoice.status],
+        ]} />
+      </PrintSection>
+      {categories.map(([category, items]) => (
+        <PrintSection key={category} title={category}>
+          {items.length === 0 ? <p>No {category.toLowerCase()} charges.</p> : (
+            <table className="careplus-print-table"><thead><tr><th>Description</th><th>Date</th><th>Qty</th><th className="number">Amount</th></tr></thead>
+              <tbody>{items.map((item) => <tr key={item.id}>
+                <td>{item.description}{item.reversalReason ? ` · ${item.reversalReason}` : ""}</td>
+                <td>{printDate(item.serviceDate ?? item.createdAt)}</td>
+                <td>{item.quantity}</td>
+                <td className="number">{money(item.subtotal ?? Number(item.unitPrice) * item.quantity)}</td>
+              </tr>)}</tbody>
+            </table>
+          )}
+        </PrintSection>
+      ))}
+      <PrintSection title="Payments and refunds">
+        {bill.invoice.payments.length === 0 ? <p>No payments recorded.</p> : (
+          <table className="careplus-print-table"><thead><tr><th>Type</th><th>Date</th><th>Method</th><th>Reference / reason</th><th className="number">Amount</th></tr></thead>
+            <tbody>{bill.invoice.payments.map((payment) => <tr key={payment.id}>
+              <td>{payment.type === "REFUND" ? "Refund" : payment.purpose === "DEPOSIT" ? "Deposit" : "Payment"}</td>
+              <td>{printDate(payment.paymentDate ?? payment.createdAt)}</td>
+              <td>{payment.paymentMethod.replaceAll("_", " ")}</td>
+              <td>{[payment.referenceNumber, payment.reason, payment.notes].filter(Boolean).join(" · ") || "—"}</td>
+              <td className="number">{payment.type === "REFUND" ? "−" : ""}{money(payment.amount)}</td>
+            </tr>)}</tbody>
+          </table>
+        )}
+      </PrintSection>
+      <PrintSection title="Bill totals">
+        <PrintRows rows={[
+          ["Total charged", money(bill.totals.charged)],
+          ["Net paid", money(bill.totals.paid)],
+          ["Balance", money(bill.totals.balance)],
+        ]} />
+      </PrintSection>
+      <div className="careplus-print-signatures">
+        <div className="careplus-print-signature"><div className="careplus-signature-line" /><span>Prepared by</span></div>
+        <div className="careplus-print-signature"><div className="careplus-signature-line" /><span>Patient / attendant signature</span></div>
+        <div className="careplus-print-signature"><div className="careplus-signature-line" /><span>Authorized signature</span></div>
+      </div>
+      <button className="no-print" data-testid="print-data-ready" hidden />
+    </DocumentLayout>
+  )
+}
+
 function PrescriptionPrintPage() {
   const { consultationId = "" } = useParams()
   const load = React.useCallback(async () => {
@@ -273,29 +396,62 @@ function PrescriptionPrintPage() {
         <PrintRows rows={[
           ["Visit date", printDate(consultation.appointment.appointmentDate)],
           ["Visit number", consultation.appointment.tokenNumber],
-          ["Age / gender", `${valueOrNotRecorded(consultation.patient.age)} / ${valueOrNotRecorded(consultation.patient.gender)}`],
+          ["Age / gender", `${valueOrNotRecorded(consultation.patient.age)} / ${formatGender(consultation.patient.gender || consultation.prescription?.patientGender || consultation.appointment?.gender)}`],
           ["Contact", valueOrNotRecorded(consultation.patient.phone)],
           ["Allergies", consultation.patient.allergies.length ? consultation.patient.allergies.join(", ") : "No known allergies"],
         ]} />
       </PrintSection>
       <PrintSection title="Diagnosis"><p>{valueOrNotRecorded(consultation.diagnosis)}</p></PrintSection>
       <PrintSection title="Vitals">
-        <PrintRows rows={[
-          ["Blood pressure", `${valueOrNotRecorded(consultation.bpSystolic)} / ${valueOrNotRecorded(consultation.bpDiastolic)} mmHg`],
-          ["Pulse", consultation.pulse == null ? "Not recorded" : `${consultation.pulse} /min`],
-          ["Temperature", consultation.temperature == null ? "Not recorded" : `${consultation.temperature} °${consultation.temperatureUnit ?? "F"}`],
-          ["Respiratory rate", consultation.respiratoryRate == null ? "Not recorded" : `${consultation.respiratoryRate} /min`],
-          ["Weight", consultation.weight == null ? "Not recorded" : `${consultation.weight} kg`],
-          ["SpO2", consultation.oxygenSaturation == null ? "Not recorded" : `${consultation.oxygenSaturation}%`],
-          ["Height", consultation.heightCm == null ? "Not recorded" : `${consultation.heightCm} cm`],
-        ]} />
-        {consultation.vitalsEstimated && <p>(estimated)</p>}
+        <div className="careplus-compact-vitals">
+          <div className="careplus-compact-vital-chip">
+            <span className="careplus-compact-vital-label">BP</span>
+            <span className="careplus-compact-vital-value">{consultation.bpSystolic != null && consultation.bpDiastolic != null ? `${consultation.bpSystolic}/${consultation.bpDiastolic} mmHg` : consultation.bpSystolic != null ? `${consultation.bpSystolic} mmHg` : "—"}</span>
+          </div>
+          <div className="careplus-compact-vital-chip">
+            <span className="careplus-compact-vital-label">Pulse</span>
+            <span className="careplus-compact-vital-value">{consultation.pulse != null ? `${consultation.pulse} /min` : "—"}</span>
+          </div>
+          <div className="careplus-compact-vital-chip">
+            <span className="careplus-compact-vital-label">Temp</span>
+            <span className="careplus-compact-vital-value">{consultation.temperature != null ? `${consultation.temperature} °${consultation.temperatureUnit ?? "F"}` : "—"}</span>
+          </div>
+          <div className="careplus-compact-vital-chip">
+            <span className="careplus-compact-vital-label">Resp Rate</span>
+            <span className="careplus-compact-vital-value">{consultation.respiratoryRate != null ? `${consultation.respiratoryRate} /min` : "—"}</span>
+          </div>
+          <div className="careplus-compact-vital-chip">
+            <span className="careplus-compact-vital-label">Weight</span>
+            <span className="careplus-compact-vital-value">{consultation.weight != null ? `${consultation.weight} kg` : "—"}</span>
+          </div>
+          <div className="careplus-compact-vital-chip">
+            <span className="careplus-compact-vital-label">SpO2</span>
+            <span className="careplus-compact-vital-value">{consultation.oxygenSaturation != null ? `${consultation.oxygenSaturation}%` : "—"}</span>
+          </div>
+          <div className="careplus-compact-vital-chip">
+            <span className="careplus-compact-vital-label">Height</span>
+            <span className="careplus-compact-vital-value">{consultation.heightCm != null ? `${consultation.heightCm} cm` : "—"}</span>
+          </div>
+          <div className="careplus-compact-vital-chip">
+            <span className="careplus-compact-vital-label">BMI</span>
+            <span className="careplus-compact-vital-value">{consultation.weight && consultation.heightCm ? (Number(consultation.weight) / ((Number(consultation.heightCm) / 100) ** 2)).toFixed(1) : "—"}</span>
+          </div>
+        </div>
+        {consultation.vitalsEstimated && <p className="careplus-print-muted text-[10px] mt-1">(estimated)</p>}
       </PrintSection>
       <PrintSection title="Medicines">
         {prescriptionRecord.items.length ? <table><thead><tr><th>Medicine</th><th>Dose</th><th>Route</th><th>Frequency</th><th>Duration</th><th>Instructions</th></tr></thead><tbody>
           {prescriptionRecord.items.map((item) => <tr key={item.id}><td>{item.medicineName}</td><td>{item.dosage}</td><td>{valueOrNotRecorded(item.route)}</td><td>{item.frequency}</td><td>{item.durationValue ?? item.durationDays} {item.durationUnit ?? "days"}</td><td>{valueOrNotRecorded(item.instructions)}</td></tr>)}
         </tbody></table> : <p>Not recorded</p>}
       </PrintSection>
+      {(consultation.followUpDate || consultation.followUpInstructions) && (
+        <PrintSection title="Follow-up">
+          <PrintRows rows={[
+            ["Next visit", consultation.followUpDate ? printDate(consultation.followUpDate) : "As advised"],
+            ...(consultation.followUpInstructions ? [["Instructions", consultation.followUpInstructions]] as Array<[string, React.ReactNode]> : []),
+          ]} />
+        </PrintSection>
+      )}
       <PrintSection title="Clinical findings"><p className="careplus-pre-wrap">{valueOrNotRecorded(consultation.findings ?? consultation.clinicalNotes)}</p></PrintSection>
       <div className="careplus-print-signatures">
         <div className="careplus-print-signature"><div className="careplus-signature-image">{images[1] && <img src={images[1]} alt={`${consultation.doctor.user.name} signature`} />}</div><div className="careplus-signature-line" /><strong>{consultation.doctor.user.name}</strong><span>{[staffProfile?.qualification ?? consultation.doctor.qualification, consultation.doctor.specialization].filter(Boolean).join(" · ") || "Doctor"}</span></div>
@@ -307,11 +463,155 @@ function PrescriptionPrintPage() {
   )
 }
 
+function AdmissionSlipPrintPage() {
+  const { admissionId = "" } = useParams()
+  const load = React.useCallback(async () => {
+    const [admission, printedBy, hospital] = await Promise.all([
+      api.getAdmissionSlipPrintData(admissionId),
+      api.me(),
+      api.getHospitalProfile(),
+    ])
+    return { admission, printedBy, hospital: hospital ?? DEFAULT_HOSPITAL_PROFILE }
+  }, [admissionId])
+  const { data, error } = useDocumentData(load)
+  const staffProfile = data?.admission.attendingDoctor.user.staffProfile
+  const images = usePrintImages(data ? [data.hospital.logoUrl, staffProfile?.signatureUrl, staffProfile?.stampUrl] : null)
+  usePrintAfterReady(Boolean(data && images))
+  if (error || !data || !images) return <Loading error={error} />
+  const { admission, printedBy, hospital } = data
+  const { patient, bed, attendingDoctor } = admission
+  const patientName = `${patient.firstName} ${patient.lastName}`.trim()
+  const admissionNo = `ADM-${admission.id.slice(0, 8).toUpperCase()}`
+
+  return (
+    <DocumentLayout
+      title="Ward Admission Slip"
+      hospital={hospital}
+      logo={images[0]}
+      printedBy={printedBy}
+      patientName={patientName}
+      mrNumber={patient.mrNumber}
+    >
+      <PrintSection title="Patient & Registration">
+        <PrintRows rows={[
+          ["Patient Name", patientName],
+          ["Patient ID / MR No.", patient.mrNumber],
+          ["Age / Gender", `${valueOrNotRecorded(patient.age)} yrs / ${formatGender(patient.gender)}`],
+          ["Contact Number", valueOrNotRecorded(patient.phone)],
+          ["Address", valueOrNotRecorded(patient.address)],
+          ["Blood Group", valueOrNotRecorded(patient.bloodGroup)],
+          ["Emergency Contact", patient.emergencyContactName ? `${patient.emergencyContactName}${patient.emergencyContactPhone ? ` (${patient.emergencyContactPhone})` : ""}` : "Not recorded"],
+        ]} />
+      </PrintSection>
+
+      <PrintSection title="Admission Details">
+        <PrintRows rows={[
+          ["Admission Number", admissionNo],
+          ["Admission Date & Time", printDate(admission.admissionDate)],
+          ["Admission Type", valueOrNotRecorded(admission.admissionType)],
+          ["Ward Name", bed.room.ward.wardName],
+          ["Ward Type", bed.room.ward.wardType],
+          ["Room Number", bed.room.roomNumber],
+          ["Bed Number", `${bed.bedNumber}${bed.bedLabel ? ` (${bed.bedLabel})` : ""}`],
+          ["Attending Doctor", attendingDoctor.user.name],
+          ["Specialization", valueOrNotRecorded(attendingDoctor.specialization)],
+          ["Daily Room / Bed Rate", Number(admission.dailyRate || bed.dailyRate).toLocaleString("en-PK", { style: "currency", currency: hospital.currency || "PKR" })],
+          ["Advance Deposit", Number(admission.depositAmount || 0) > 0
+            ? `${Number(admission.depositAmount).toLocaleString("en-PK", { style: "currency", currency: hospital.currency || "PKR" })} (${admission.depositStatus})`
+            : "No advance deposit recorded"],
+        ]} />
+      </PrintSection>
+
+      <PrintSection title="Reason for Admission">
+        <p className="careplus-pre-wrap">{valueOrNotRecorded(admission.admissionReason)}</p>
+      </PrintSection>
+
+      {admission.admissionNotes && (
+        <PrintSection title="Clinical Directives & Admission Notes">
+          <p className="careplus-pre-wrap">{admission.admissionNotes}</p>
+        </PrintSection>
+      )}
+
+      <div className="careplus-print-signatures">
+        <div className="careplus-print-signature">
+          <div className="careplus-signature-image">{images[1] && <img src={images[1]} alt={`${attendingDoctor.user.name} signature`} />}</div>
+          <div className="careplus-signature-line" />
+          <strong>{attendingDoctor.user.name}</strong>
+          <span>Attending Doctor</span>
+        </div>
+        <div className="careplus-print-signature">
+          <div className="careplus-stamp-image">{images[2] && <img src={images[2]} alt={`${attendingDoctor.user.name} stamp`} />}</div>
+          <div className="careplus-signature-line" />
+          <span>Doctor Stamp</span>
+        </div>
+        <div className="careplus-print-signature">
+          <div className="careplus-signature-image" />
+          <div className="careplus-signature-line" />
+          <strong>{printedBy.name}</strong>
+          <span>Admitting Officer / Nurse</span>
+        </div>
+        <div className="careplus-print-signature">
+          <div className="careplus-signature-image" />
+          <div className="careplus-signature-line" />
+          <span>Patient / Attendant Signature</span>
+        </div>
+      </div>
+      <button className="no-print" data-testid="print-data-ready" hidden />
+    </DocumentLayout>
+  )
+}
+
+function PharmacyInvoicePrintPage() {
+  const { invoiceId = "", saleId = "" } = useParams()
+  const load = React.useCallback(async () => {
+    const id = invoiceId || saleId
+    const [invoiceData, printedBy, hospital, pharmacySettings] = await Promise.all([
+      api.getPharmacyInvoice(id),
+      api.me(),
+      api.getHospitalProfile(),
+      api.getPharmacySettings().catch(() => null),
+    ])
+    return { invoiceData, printedBy, hospital: hospital ?? DEFAULT_HOSPITAL_PROFILE, pharmacySettings }
+  }, [invoiceId, saleId])
+  const { data, error } = useDocumentData(load)
+  const images = usePrintImages(data ? [data.pharmacySettings?.logoUrl || data.hospital.logoUrl] : null)
+  usePrintAfterReady(Boolean(data && images))
+  if (error || !data || !images) return <Loading error={error} />
+  const { invoiceData, pharmacySettings } = data
+  const sale: ApiPharmacySale = {
+    id: invoiceData.pharmacySale.id,
+    cashierId: invoiceData.pharmacySale.cashier.id,
+    cashier: invoiceData.pharmacySale.cashier,
+    totalAmount: invoiceData.grandTotal,
+    subtotal: invoiceData.subtotal,
+    discountAmount: invoiceData.discountAmount,
+    taxAmount: invoiceData.taxAmount,
+    paymentMethod: invoiceData.pharmacySale.paymentMethod,
+    customerName: invoiceData.pharmacySale.customerName,
+    customerPhone: invoiceData.pharmacySale.customerPhone,
+    items: invoiceData.pharmacySale.items,
+    invoice: invoiceData,
+  }
+
+  return (
+    <div className="p-4 bg-white">
+      <InvoicePrintDocument sale={sale} layout="a4" pharmacySettings={pharmacySettings} />
+      <button className="no-print" data-testid="print-data-ready" hidden />
+    </div>
+  )
+}
+
 export default function PrintDocuments() {
   return <Routes>
+    <Route path="admission/:admissionId" element={<AdmissionSlipPrintPage />} />
+    <Route path="admission-slip/:admissionId" element={<AdmissionSlipPrintPage />} />
     <Route path="patient-summary/:patientId" element={<PatientSummaryPrintPage />} />
     <Route path="discharge/:admissionId" element={<DischargePrintPage />} />
+    <Route path="discharge-summary/:admissionId" element={<DischargePrintPage />} />
+    <Route path="ipd-bill/:admissionId" element={<IpdBillPrintPage />} />
     <Route path="prescription/:consultationId" element={<PrescriptionPrintPage />} />
+    <Route path="pharmacy-invoice/:invoiceId" element={<PharmacyInvoicePrintPage />} />
+    <Route path="pharmacy/:saleId" element={<PharmacyInvoicePrintPage />} />
     <Route path="*" element={<Loading error="Print document not found." />} />
   </Routes>
 }

@@ -31,10 +31,23 @@ export const DOCTORS: Doctor[] = [
 export const PATIENTS: Patient[] = [
 ]
 
+const STATUS_MAP: Record<string, Appointment["status"]> = {
+  PENDING_APPROVAL: "Pending Approval",
+  CONFIRMED: "Confirmed",
+  WAITING: "Waiting",
+  IN_CONSULTATION: "In Consultation",
+  DONE: "Done",
+  COMPLETED: "Done",
+  CANCELLED: "Cancelled",
+  EXPIRED: "Expired",
+  NO_SHOW: "No-show",
+}
+
 let apptId = 0
-const mkAppt = (partial: Omit<Appointment, "id" | "token" | "createdAt">): Appointment => {
+const mkAppt = (partial: Omit<Appointment, "id" | "token" | "createdAt" | "status"> & { status: string }): Appointment => {
   apptId += 1
-  return { ...partial, id: `apt-${apptId}`, token: apptId, createdAt: iso(-1) }
+  const mappedStatus = STATUS_MAP[partial.status] ?? (partial.status as Appointment["status"])
+  return { ...partial, status: mappedStatus, id: `apt-${apptId}`, token: apptId, createdAt: iso(-1) }
 }
 
 export const APPOINTMENTS: Appointment[] = [

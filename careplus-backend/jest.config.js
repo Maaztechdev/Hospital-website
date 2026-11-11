@@ -9,6 +9,18 @@ module.exports = {
     "^@config/(.*)$": "<rootDir>/src/config/$1",
   },
   setupFiles: ["<rootDir>/tests/setupEnv.ts"],
+  setupFilesAfterEnv: ["<rootDir>/tests/setupAfterEnv.ts"],
   globalTeardown: "<rootDir>/tests/globalTeardown.ts",
   testTimeout: 60000,
+  transform: {
+    "^.+\\.tsx?$": [
+      "ts-jest",
+      {
+        isolatedModules: true,
+        diagnostics: {
+          ignoreCodes: [151002],
+        },
+      },
+    ],
+  },
 };

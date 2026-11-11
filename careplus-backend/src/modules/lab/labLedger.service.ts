@@ -5,6 +5,7 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "@
 import { AccessTokenPayload } from "@common/middleware/authenticate";
 import { PageParams } from "@common/utils/pagination";
 import { writeAuditLog } from "@common/utils/auditLog";
+import { roundMoney } from "@common/utils/money";
 
 const roundPkr = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -19,7 +20,7 @@ export async function appendLabLedgerEntry(
   input: {
     accountId: string;
     type: LabLedgerEntryType;
-    amount: number;
+    amount: number | Prisma.Decimal;
     createdBy: string;
     invoiceId?: string;
     labOrderId?: string;
@@ -42,11 +43,12 @@ export async function appendLabLedgerEntry(
     where: { accountId: input.accountId },
     _sum: { amount: true },
   });
-  const balanceAfter = roundPkr(Number(balance._sum.amount ?? 0) + input.amount);
+  const amount = roundMoney(input.amount);
+  const balanceAfter = roundMoney(new Prisma.Decimal(balance._sum.amount ?? 0).plus(amount));
   const entry = await tx.labLedgerEntry.create({
     data: {
       ...input,
-      amount: roundPkr(input.amount),
+      amount,
       balanceAfter,
     },
   });
@@ -64,7 +66,7 @@ export async function appendLabLedgerEntry(
 export async function postLabInvoicePayment(
   tx: Prisma.TransactionClient,
   invoiceId: string,
-  amount: number,
+  amount: number | Prisma.Decimal,
   paymentMethod: PaymentMethod,
   createdBy: string,
 ) {

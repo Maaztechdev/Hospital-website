@@ -1,4 +1,4 @@
-import type { BloodGroup } from "@/dashboard/types"
+import { ROLE_LABELS, type BloodGroup, type Role } from "@/dashboard/types"
 
 // Shared formatting utilities for the dashboard. Keep all PKR/date/id
 // formatting centralized here so every module stays consistent.
@@ -15,6 +15,19 @@ export function getHospitalDateKey(): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: HOSPITAL_TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date())
   const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "00"
   return `${part("year")}-${part("month")}-${part("day")}`
+}
+
+export function getLocalDateKey(d: Date = new Date()): string {
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+export function formatWeekday(value: string | Date): string {
+  const date = value instanceof Date ? value : new Date(`${value}T12:00:00+05:00`)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleDateString("en-US", { weekday: "short", timeZone: HOSPITAL_TIMEZONE })
 }
 
 export function getHospitalDateKeyForTimestamp(timestamp: string): string {
@@ -70,6 +83,21 @@ export function formatDateTime(iso: string): string {
   return `${formatDate(iso)}, ${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: HOSPITAL_TIMEZONE })}`
 }
 
+export function formatTime(iso: string): string {
+  if (!iso) return "—"
+  const timeOnly = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(iso)
+  if (timeOnly) {
+    const hours = Number(timeOnly[1])
+    const minutes = timeOnly[2]
+    const period = hours >= 12 ? "PM" : "AM"
+    const hour12 = hours % 12 === 0 ? 12 : hours % 12
+    return `${String(hour12).padStart(2, "0")}:${minutes} ${period}`
+  }
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: HOSPITAL_TIMEZONE })
+}
+
 export function formatTimeAgo(iso: string): string {
   const then = new Date(iso).getTime()
   const now = Date.now()
@@ -81,6 +109,10 @@ export function formatTimeAgo(iso: string): string {
   if (diffHr < 24) return `${diffHr} hr ago`
   const diffDay = Math.floor(diffHr / 24)
   return `${diffDay} day${diffDay > 1 ? "s" : ""} ago`
+}
+
+export function formatStaffDisplayName(name: string, role: Role): string {
+  return name.trim() || ROLE_LABELS[role]
 }
 
 export function formatWaitingTime(iso?: string): string {

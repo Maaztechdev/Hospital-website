@@ -142,7 +142,7 @@ describe("Integration: newly wired clinical modules", () => {
           ranges: [{ gender: "ANY", ageMinDays: 20, ageMaxDays: 10 }],
         }],
       });
-    expect(invalidRangeResponse.status).toBe(400);
+    expect(invalidRangeResponse.status).toBe(422);
 
     const packageResponse = await request(app)
       .post(`${api}/lab/packages`)

@@ -39,9 +39,9 @@ describe("Lab billing API validation and policies", () => {
     expect(isLabPaymentSatisfied(true, 1)).toBe(false);
   });
 
-  it("restricts Lab invoice cancellation to Admin while preserving existing non-Lab roles", () => {
+  it("allows Admin and Billing Manager to void Lab invoices", () => {
     expect(canVoidLabInvoice("ADMIN", true)).toBe(true);
-    expect(canVoidLabInvoice("BILLING_MANAGER", true)).toBe(false);
+    expect(canVoidLabInvoice("BILLING_MANAGER", true)).toBe(true);
     expect(canVoidLabInvoice("BILLING_MANAGER", false)).toBe(true);
   });
 

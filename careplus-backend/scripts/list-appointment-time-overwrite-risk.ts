@@ -27,7 +27,7 @@ async function main() {
     LEFT JOIN patients p ON p.id = a.patient_id
     LEFT JOIN doctors d ON d.id = a.doctor_id
     LEFT JOIN users u ON u.id = d.user_id
-    WHERE a.status IN ('IN_CONSULTATION', 'DONE')
+    WHERE a.status IN ('IN_CONSULTATION', 'COMPLETED')
     ORDER BY a.appointment_date ASC, a.time_slot ASC
   `;
 

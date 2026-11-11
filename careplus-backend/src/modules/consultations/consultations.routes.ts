@@ -42,6 +42,13 @@ router.patch(
   consultationsController.update
 );
 
+router.put(
+  "/:id",
+  requireRole(["ADMIN", "DOCTOR"]),
+  validate({ params: idParamSchema, body: updateConsultationSchema }),
+  consultationsController.update
+);
+
 /**
  * @openapi
  * /consultations/{id}/sign:

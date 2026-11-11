@@ -25,7 +25,7 @@ test("ultrasound order completes with attachment and cancellation is rejected af
   const schedule = await request.patch(`${apiBase}/ultrasound/${order.id}/schedule`, { headers, data: { scheduledAt: "2035-01-15T10:00:00.000Z", technicianId: technician.id } })
   expect(schedule.ok(), await schedule.text()).toBeTruthy()
   expect((await request.patch(`${apiBase}/ultrasound/${order.id}/start`, { headers })).ok()).toBeTruthy()
-  expect((await request.patch(`${apiBase}/ultrasound/${order.id}/complete`, { headers, data: { findings: "E2E normal findings", impression: "E2E normal impression", imageUrls: ["https://example.com/e2e-ultrasound.png"] } })).ok()).toBeTruthy()
+  expect((await request.patch(`${apiBase}/ultrasound/${order.id}/complete`, { headers, data: { findings: "E2E normal findings", impression: "E2E normal impression", imageUrls: ["https://example.com/e2e-ultrasound.png"], imageCaptions: ["Transverse scan"] } })).ok()).toBeTruthy()
   expect((await request.patch(`${apiBase}/ultrasound/${order.id}/cancel`, { headers })).status()).toBe(409)
   await openDashboard(page, session, "/dashboard/ultrasound")
   await expect(page.getByRole("heading", { name: /Ultrasound/i })).toBeVisible()

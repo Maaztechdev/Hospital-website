@@ -38,17 +38,21 @@ describe("Lab receivable and send-out payable ledger", () => {
       });
     }
     if (current.orderIds.length) {
-      await prisma.labOrderEvent.deleteMany({ where: { labOrderId: { in: current.orderIds } } });
-      await prisma.labOrder.deleteMany({ where: { id: { in: current.orderIds } } });
+      await prisma.labOrder.updateMany({
+        where: { id: { in: current.orderIds } },
+        data: { invoiceId: null, referringClinicAccountId: null },
+      });
     }
     if (current.invoiceId) {
       await prisma.payment.deleteMany({ where: { invoiceId: current.invoiceId } });
       await prisma.invoiceItem.deleteMany({ where: { invoiceId: current.invoiceId } });
       await prisma.invoice.delete({ where: { id: current.invoiceId } });
     }
-    if (current.testId) await prisma.labTest.delete({ where: { id: current.testId } });
     if (current.accountIds.length) await prisma.labLedgerAccount.deleteMany({ where: { id: { in: current.accountIds } } });
-    if (current.supplierId) await prisma.supplier.delete({ where: { id: current.supplierId } });
+    if (current.supplierId) {
+      await prisma.labTest.updateMany({ where: { referenceLabSupplierId: current.supplierId }, data: { referenceLabSupplierId: null } });
+      await prisma.supplier.delete({ where: { id: current.supplierId } });
+    }
     const ids = [...current.accountIds, ...current.orderIds, ...(current.testId ? [current.testId] : []), ...(current.invoiceId ? [current.invoiceId] : [])];
     if (ids.length) await prisma.auditLog.deleteMany({ where: { module: { in: ["lab", "billing"] }, entityId: { in: ids } } });
     fixture = { accountIds: [], orderIds: [] };

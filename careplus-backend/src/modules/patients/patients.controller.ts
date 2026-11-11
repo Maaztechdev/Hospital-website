@@ -61,6 +61,12 @@ export const patientsController = {
     sendSuccess(res, 200, { message: "Patient deactivated (soft delete)" });
   }),
 
+  restore: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const restored = await patientsService.restore(req.user.sub, req.params.id, req);
+    sendSuccess(res, 200, { data: restored, message: "Patient restored successfully" });
+  }),
+
   merge: asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
     const result = await patientsService.merge(req.user.sub, req.body.primaryPatientId, req.body.duplicatePatientId, req);

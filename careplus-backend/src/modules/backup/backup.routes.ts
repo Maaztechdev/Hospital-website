@@ -29,8 +29,8 @@ router.delete("/:id", validate({ params: idSchema }), asyncHandler(async (req: R
 }));
 router.post("/:id/restore", validate({ params: idSchema, body: restoreSchema }), asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new UnauthorizedError();
-  await backupService.restore(req.params.id, req.body.password, req.user.sub, req);
-  sendSuccess(res, 200, { message: "Database restored successfully" });
+  const result = await backupService.restore(req.params.id, req.body.password, req.user.sub, req);
+  sendSuccess(res, 200, { data: result, message: result.message || "Database restored successfully" });
 }));
 
 export default router;

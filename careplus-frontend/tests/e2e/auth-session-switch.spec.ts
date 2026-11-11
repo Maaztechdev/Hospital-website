@@ -66,7 +66,7 @@ test("parallel unauthorized API requests share one refresh and retry successfull
       const url = String(input)
       if (url.includes("/auth/me") && (window as Window & { __authMe401Count: number }).__authMe401Count < 2) {
         const current = (window as Window & { __authMe401Count: number }).__authMe401Count
-        ;(window as Window & { __authMe401Count: number }).__authMe401Count = current + 1
+          ; (window as Window & { __authMe401Count: number }).__authMe401Count = current + 1
         return Promise.resolve(new Response(JSON.stringify({ success: false, data: null, message: "Invalid or expired access token", errors: null }), {
           status: 401,
           headers: { "Content-Type": "application/json" },
@@ -74,7 +74,7 @@ test("parallel unauthorized API requests share one refresh and retry successfull
       }
       if (url.includes("/auth/refresh")) {
         const current = (window as Window & { __refreshCallCount: number }).__refreshCallCount
-        ;(window as Window & { __refreshCallCount: number }).__refreshCallCount = current + 1
+          ; (window as Window & { __refreshCallCount: number }).__refreshCallCount = current + 1
       }
       return originalFetch(input, init)
     }
@@ -84,9 +84,22 @@ test("parallel unauthorized API requests share one refresh and retry successfull
   await expect(page).toHaveURL(/\/dashboard\/admin$/)
 
   const results = await page.evaluate(async () => {
-    const moduleUrl = new URL("/src/lib/api.ts", window.location.origin).href
-    const { apiRequest } = await import(/* @vite-ignore */ moduleUrl) as typeof import("../../src/lib/api")
-    const users = await Promise.all([apiRequest("/auth/me"), apiRequest("/auth/me")])
+    let callMe: () => Promise<unknown>
+    const apiPreload = document.querySelector<HTMLLinkElement>('link[rel="modulepreload"][href*="api-"]')
+    if (apiPreload?.href) {
+      const mod = await import(/* @vite-ignore */ apiPreload.href)
+      const apiObj = Object.values(mod).find((v: unknown) => v && typeof v === "object" && typeof (v as { me?: unknown }).me === "function") as { me: () => Promise<unknown> } | undefined
+      if (apiObj) {
+        callMe = () => apiObj.me()
+      } else {
+        const fn = mod.apiRequest ?? (window as unknown as { __careplusApi?: { apiRequest: (p: string) => Promise<unknown> } }).__careplusApi?.apiRequest
+        callMe = () => fn("/auth/me")
+      }
+    } else {
+      const mod = await import(/* @vite-ignore */ new URL("/src/lib/api.ts", window.location.origin).href)
+      callMe = () => mod.api.me()
+    }
+    const users = await Promise.all([callMe(), callMe()])
     const refreshCalls = (window as Window & { __refreshCallCount: number }).__refreshCallCount
     const unauthorizedCalls = (window as Window & { __authMe401Count: number }).__authMe401Count
     return { users, refreshCalls, unauthorizedCalls }

@@ -21,6 +21,7 @@ test.afterEach(() => {
 })
 
 test("OT surgery transitions through pre-op, surgery, recovery, and completion", async ({ page, request }) => {
+  test.setTimeout(60_000)
   const session = await login(request)
   const headers = { Authorization: `Bearer ${session.accessToken}` }
   const patient = (await first<Array<{ id: string; mrNumber: string; firstName: string; lastName: string }>>(request, "/patients?limit=1", headers))[0]
@@ -159,7 +160,7 @@ test("doctor schedules their own surgery and sees it in the week view", async ({
   await expect(page.getByRole("alert")).toHaveCount(0)
   await expect(page.getByText("Unable to complete request")).toHaveCount(0)
   expect(availabilityRequests).toHaveLength(0)
-  await page.getByRole("button", { name: "Next" }).click()
+  await page.getByRole("button", { name: "Next", exact: true }).click()
 
   const surgeonSelect = page.getByText("Surgeon", { exact: true }).locator("..").locator("select")
   await expect(surgeonSelect).toHaveValue(ownDoctor!.id)
@@ -224,7 +225,7 @@ test("doctor schedules their own surgery and sees it in the week view", async ({
   await page.locator('input[type="date"]').fill(dateText)
   await timeSelect.selectOption(scheduledTime)
   await page.getByText("Anesthesia Type", { exact: true }).locator("..").locator("select").selectOption("General")
-  await page.getByRole("button", { name: "Next" }).click()
+  await page.getByRole("button", { name: "Next", exact: true }).click()
   await page.getByLabel("Consent signed").check()
   await page.getByLabel("NPO confirmed").check()
   await page.getByLabel("Labs done").check()
@@ -257,8 +258,14 @@ test("doctor schedules their own surgery and sees it in the week view", async ({
     hour: "2-digit",
     minute: "2-digit",
     hour12: true,
-    timeZone: "UTC",
-  }).format(new Date(`2020-01-01T${scheduledTime}:00Z`))
+    timeZone: "Asia/Karachi",
+  }).format(new Date(scheduledSurgery.scheduledStart))
+  const displayedTime24 = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "Asia/Karachi",
+  }).format(new Date(scheduledSurgery.scheduledStart))
   const surgeryCard = page.getByRole("button", { name: new RegExp(`${displayedTime}.*${patient.firstName}`) }).first()
   await expect(surgeryCard).toBeVisible()
   await expect(page.getByText(/^Week View/)).toBeVisible()
@@ -274,7 +281,7 @@ test("doctor schedules their own surgery and sees it in the week view", async ({
   await page.getByRole("tab", { name: "OT", exact: true }).click()
   await expect(page.getByText(procedureName, { exact: true })).toBeVisible()
   await expect(page.getByText("Scheduled", { exact: true }).last()).toBeVisible()
-  await expect(page.getByText(new RegExp(displayedTime)).first()).toBeVisible()
+  await expect(page.getByText(new RegExp(`at ${displayedTime24}`)).first()).toBeVisible()
 
   await page.goto("/dashboard/ward")
   await page.getByRole("button", { name: "Admit Patient" }).click()

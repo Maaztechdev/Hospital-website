@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test"
+import { ensureAvailableBeds } from "./test-helpers"
 
 const apiBase = process.env.PLAYWRIGHT_API_URL ?? "http://127.0.0.1:4000/api/v1"
 const admin = { email: "admin@careplus.local", password: "Admin@12345" }
@@ -29,6 +30,8 @@ async function findOrCreateAvailablePatient(request: APIRequestContext, headers:
         diagnosis: "Ward E2E cleanup",
         conditionAtDischarge: "Stable",
         instructions: "Test cleanup.",
+        confirmUnpaidBalance: true,
+        overrideReason: "Ward E2E test cleanup",
       },
     })
     expect(dischargeResponse.ok(), await dischargeResponse.text()).toBeTruthy()
@@ -77,6 +80,7 @@ test("ward admission transfer and discharge persist after reload", async ({ page
   test.setTimeout(90000)
   const session = await apiLogin(request)
   const headers = { Authorization: `Bearer ${session.accessToken}` }
+  await ensureAvailableBeds(request, headers, 2)
   const [patient, doctorsResponse, bedsResponse] = await Promise.all([
     findOrCreateAvailablePatient(request, headers),
     request.get(`${apiBase}/appointments/doctors`, { headers }),
@@ -122,6 +126,8 @@ test("ward admission transfer and discharge persist after reload", async ({ page
       diagnosis: "Ward round-trip diagnosis",
       conditionAtDischarge: "Stable",
       instructions: "Follow the discharge plan.",
+      confirmUnpaidBalance: true,
+      overrideReason: "Ward E2E test cleanup",
     },
   })
   expect(dischargeResponse.ok()).toBeTruthy()
@@ -217,6 +223,8 @@ test("cleaning bed can be made available, admitted, and reflected in dashboard c
           diagnosis: "Ward daily-rate cleanup",
           conditionAtDischarge: "Stable",
           instructions: "Test cleanup.",
+          confirmUnpaidBalance: true,
+          overrideReason: "Ward E2E test cleanup",
         },
       })
       expect(dischargeResponse.ok(), await dischargeResponse.text()).toBeTruthy()
@@ -234,6 +242,7 @@ test("cleaning bed can be made available, admitted, and reflected in dashboard c
 test("admission empty state explains unavailable beds and offers the cleaning shortcut", async ({ page, request }) => {
   const session = await apiLogin(request)
   const headers = { Authorization: `Bearer ${session.accessToken}` }
+  await ensureAvailableBeds(request, headers, 2)
   const bedsResponse = await request.get(`${apiBase}/wards/beds/availability`, { headers })
   expect(bedsResponse.ok()).toBeTruthy()
   const startingBeds = (await bedsResponse.json()).data as Array<{ id: string; status: string }>

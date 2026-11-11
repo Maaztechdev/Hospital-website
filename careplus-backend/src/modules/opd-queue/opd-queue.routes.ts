@@ -48,6 +48,6 @@ router.post("/:id/start-consultation", requireRole(["ADMIN", "DOCTOR"]), appoint
  *     responses:
  *       200: { description: OK }
  */
-router.post("/:id/requeue", requireRole(["ADMIN", "RECEPTIONIST", "NURSE"]), appointmentsController.requeue);
+router.post("/:id/requeue", requireRole(["ADMIN", "RECEPTIONIST", "NURSE", "DOCTOR"]), appointmentsController.requeue);
 
 export default router;

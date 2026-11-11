@@ -80,15 +80,20 @@ export const dispenseSchema = z.object({
 export const dispensePrescriptionSchema = z.object({
   items: z.array(z.object({
     prescriptionItemId: z.string().uuid(),
-    quantity: z.number().int().positive(),
+    quantity: z.number().int().min(0),
   })).min(1).max(100).superRefine((items, context) => {
     const ids = new Set<string>();
+    let totalDispensed = 0;
     items.forEach((item, index) => {
       if (ids.has(item.prescriptionItemId)) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: [index, "prescriptionItemId"], message: "Each prescription line may only be dispensed once." });
       }
       ids.add(item.prescriptionItemId);
+      totalDispensed += item.quantity;
     });
+    if (totalDispensed <= 0) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["items"], message: "At least one item must have a quantity greater than zero to dispense." });
+    }
   }),
 });
 

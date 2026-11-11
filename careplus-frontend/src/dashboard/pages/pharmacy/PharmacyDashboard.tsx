@@ -14,7 +14,10 @@ import { formatCurrency, formatDate, formatDateTime } from "@/dashboard/lib/form
 import { api, type ApiMedicine, type ApiMedicineBatch, type ApiMedicineCategory, type ApiCreateMedicineInput, type ApiPharmacyOverview, type ApiPharmacySale, type ApiPharmacySettings, type ApiPrescription, type ApiStockMovement } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
+import type { Patient, Doctor } from "@/dashboard/types"
 import { InvoicePrintDocument, PrescriptionPrintDocument, type PrintLayout } from "./PharmacyPrintDocuments"
+import { printElement } from "@/lib/print"
+import WardMedicineIssuePanel from "@/dashboard/pages/pharmacy/WardMedicineIssuePanel"
 
 type PharmacyMedicine = ApiMedicine & { currentStock: number; availableStock: number; reorderLevel: number; sellingPrice: number; status: "In Stock" | "Low Stock" | "Out of Stock" | "Near Expiry" | "Expired"; batchNumber: string; expiryDate: string }
 
@@ -92,10 +95,9 @@ function SaleModal({ open, medicines, onClose, onSaved }: { open: boolean; medic
   }, [toast])
   React.useEffect(() => {
     if (!printing) return
-    const handleAfterPrint = () => setPrinting(false)
-    window.addEventListener("afterprint", handleAfterPrint, { once: true })
-    const frame = window.requestAnimationFrame(() => window.print())
-    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("afterprint", handleAfterPrint) }
+    void printElement("pharmacy-print-root", {
+      afterPrint: () => setPrinting(false),
+    }).catch(() => setPrinting(false))
   }, [printing])
   if (!open) return null
   if (sale) return <><Modal open onClose={onClose} title={`Invoice ${sale.invoice.invoiceNumber}`}><div className="space-y-3 text-sm"><p className="text-[var(--cp-ink-soft)]">Pharmacy sale recorded successfully.</p>{sale.items.map((item) => <div key={item.id} className="flex justify-between border-b border-[var(--cp-border)] pb-2"><span>{item.medicine.name} x{item.quantity}</span><span className="cp-tabular">{formatCurrency(Number(item.subtotal))}</span></div>)}<div className="flex justify-between pt-2 font-semibold"><span>Total</span><span className="cp-tabular">{formatCurrency(Number(sale.totalAmount))}</span></div></div><div className="mt-5 flex items-center justify-between gap-2"><label className="text-xs text-[var(--cp-ink-soft)]">Print format<select value={printLayout} onChange={(event) => setPrintLayout(event.target.value as PrintLayout)} className="ml-2 rounded border border-[var(--cp-border)] px-2 py-1 text-xs"><option value="a4">A4</option><option value="receipt">80mm receipt</option></select></label><div className="flex gap-2"><Button variant="outline" size="sm" onClick={onClose}>Done</Button><Button size="sm" onClick={() => setPrinting(true)}><Printer className="h-4 w-4" /> Print Invoice</Button></div></div></Modal>{printing && <InvoicePrintDocument sale={sale} layout={printLayout} pharmacySettings={pharmacySettings} />}</>
@@ -255,69 +257,219 @@ function StockInModal({ medicine, onClose, onSaved }: { medicine: PharmacyMedici
   )
 }
 
+function parseFrequencyMultiplier(freq?: string | null): number {
+  if (!freq) return 1
+  const f = freq.trim().toUpperCase()
+  if (f === "OD" || f === "QD" || f.includes("ONCE") || f.includes("DAILY")) return 1
+  if (f === "BD" || f === "BID" || f.includes("TWICE")) return 2
+  if (f === "TDS" || f === "TID" || f.includes("THRICE") || f.includes("THREE")) return 3
+  if (f === "QID" || f.includes("FOUR")) return 4
+  if (f.includes("Q4H")) return 6
+  if (f.includes("Q6H")) return 4
+  if (f.includes("Q8H")) return 3
+  if (f === "STAT") return 1
+  if (f === "PRN" || f === "SOS") return 5
+  const num = parseInt(f, 10)
+  return Number.isFinite(num) && num > 0 ? num : 1
+}
+
+function calculateSuggestedQuantity(item: ApiPrescription["items"][0], availableStock: number): number {
+  const duration = Number(item.durationValue ?? item.durationDays) || 1
+  const multiplier = parseFrequencyMultiplier(item.frequencyCode ?? item.frequency)
+  const dosePerIntake = Math.max(1, Math.round(Number(item.doseAmount) || 1))
+  const calculated = Math.max(1, duration * multiplier * dosePerIntake)
+  if (availableStock > 0) {
+    return Math.min(calculated, availableStock)
+  }
+  return calculated
+}
+
 function DispensePrescriptionModal({ prescription, medicines, onClose, onSaved }: { prescription: ApiPrescription | null; medicines: PharmacyMedicine[]; onClose: () => void; onSaved: () => Promise<void> }) {
   const { toast } = useToast()
   const [quantities, setQuantities] = React.useState<Record<string, string>>({})
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
-  React.useEffect(() => { setQuantities({}); setError(null) }, [prescription?.id])
+  const [completedInvoice, setCompletedInvoice] = React.useState<{ invoiceNumber: string; invoiceId: string } | null>(null)
+
+  React.useEffect(() => {
+    if (!prescription) {
+      setQuantities({})
+      setError(null)
+      setCompletedInvoice(null)
+      return
+    }
+    const initial: Record<string, string> = {}
+    for (const item of prescription.items) {
+      if (item.isCatalogItem && item.medicineId) {
+        const med = medicines.find((m) => m.id === item.medicineId)
+        const suggested = calculateSuggestedQuantity(item, med?.availableStock ?? 0)
+        initial[item.id] = String(suggested)
+      }
+    }
+    setQuantities(initial)
+    setError(null)
+    setCompletedInvoice(null)
+  }, [prescription?.id, medicines])
+
   if (!prescription) return null
+
+  if (completedInvoice) {
+    return (
+      <Modal open onClose={onClose} title="Prescription Dispensed Successfully" size="md">
+        <div className="space-y-4 py-2">
+          <div className="rounded-xl border border-[var(--cp-success)] bg-[var(--cp-success-light)] p-4 text-[var(--cp-ink)]">
+            <h3 className="font-semibold text-[var(--cp-success-ink)]">Dispense Completed</h3>
+            <p className="mt-1 text-sm text-[var(--cp-ink-soft)]">
+              Invoice <span className="font-semibold text-[var(--cp-ink)]">{completedInvoice.invoiceNumber}</span> was generated. Non-expired batch stock has been deducted using FEFO.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-[var(--cp-border)] pt-4">
+            <Button variant="outline" size="sm" onClick={onClose}>
+              Done
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                window.open(`/print/pharmacy-invoice/${completedInvoice.invoiceId}`, "_blank")
+                onClose()
+              }}
+              className="gap-1.5"
+            >
+              <Printer className="h-4 w-4" /> Print Invoice Slip
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    )
+  }
+
   const catalogItems = prescription.items.filter((item) => item.isCatalogItem && item.medicineId)
+  const estimatedTotal = catalogItems.reduce((sum, item) => {
+    const med = medicines.find((candidate) => candidate.id === item.medicineId)
+    const qty = Number(quantities[item.id]) || 0
+    return sum + (med ? qty * med.sellingPrice : 0)
+  }, 0)
 
   return (
-    <Modal open onClose={onClose} title={`Dispense prescription for ${prescription.patient?.firstName ?? "patient"}`}>
-      <p className="mb-3 text-sm text-[var(--cp-ink-soft)]">
-        {prescription.patient ? `${prescription.patient.firstName} ${prescription.patient.lastName} · MR ${prescription.patient.mrNumber}` : "Patient details unavailable"}
-        {prescription.doctor?.user.name ? ` · ${prescription.doctor.user.name}` : ""}
-      </p>
+    <Modal open onClose={onClose} title={`Dispense prescription for ${prescription.patient?.firstName ?? "patient"}`} size="lg">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-[var(--cp-border)] pb-3">
+        <div>
+          <p className="text-sm font-medium text-[var(--cp-ink)]">
+            {prescription.patient ? `${prescription.patient.firstName} ${prescription.patient.lastName}` : "Patient details unavailable"}
+            <span className="ml-2 font-normal text-[var(--cp-ink-soft)]">MR# {prescription.patient?.mrNumber ?? "—"}</span>
+          </p>
+          <p className="text-xs text-[var(--cp-ink-soft)]">
+            Prescribed by {prescription.doctor?.user.name ?? "Doctor"} · {formatDate(prescription.signedAt ?? prescription.createdAt)}
+          </p>
+        </div>
+        <div className="text-right">
+          <span className="text-xs text-[var(--cp-ink-soft)]">Est. Total</span>
+          <p className="cp-tabular text-base font-bold text-[var(--cp-ink)]">{formatCurrency(estimatedTotal)}</p>
+        </div>
+      </div>
+
       <div className="space-y-3">
         {catalogItems.map((item) => {
           const medicine = medicines.find((candidate) => candidate.id === item.medicineId)
-          return <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_7rem] items-end gap-3 rounded-xl border border-[var(--cp-border)] p-3">
-            <div>
-              <p className="font-medium">{item.medicineName}</p>
-              <p className="text-xs text-[var(--cp-ink-soft)]">
-                {item.doseAmount ?? item.dosage} {item.doseUnit ?? ""} · {item.frequencyCode ?? item.frequency} · {item.durationValue ?? item.durationDays} {item.durationUnit ?? "days"}
-              </p>
-              <p className={`mt-1 text-xs ${(medicine?.availableStock ?? 0) > 0 ? "text-[var(--cp-ink-soft)]" : "font-medium text-[var(--cp-critical)]"}`}>
-                {medicine ? `${medicine.availableStock} non-expired units available; FEFO batches will be used.` : "Medicine is not in the active catalog."}
-              </p>
+          const qty = Number(quantities[item.id]) || 0
+          const lineTotal = medicine ? qty * medicine.sellingPrice : 0
+
+          return (
+            <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_8rem] items-end gap-3 rounded-xl border border-[var(--cp-border)] p-3">
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium text-sm text-[var(--cp-ink)]">{item.medicineName}</p>
+                  {medicine && <span className="cp-tabular text-xs font-semibold text-[var(--cp-ink-soft)]">{formatCurrency(medicine.sellingPrice)} / unit</span>}
+                </div>
+                <p className="text-xs text-[var(--cp-ink-soft)]">
+                  {item.doseAmount ?? item.dosage} {item.doseUnit ?? ""} · {item.frequencyCode ?? item.frequency} · {item.durationValue ?? item.durationDays} {item.durationUnit ?? "days"}
+                  {item.instructions ? ` (${item.instructions})` : ""}
+                </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <span className={`text-xs ${medicine && medicine.availableStock > 0 ? "text-[var(--cp-success)]" : "font-medium text-[var(--cp-critical)]"}`}>
+                    {medicine ? `${medicine.availableStock} in stock (FEFO)` : "Not in catalog"}
+                  </span>
+                  {lineTotal > 0 && (
+                    <span className="cp-tabular text-xs font-medium text-[var(--cp-ink)]">
+                      · Line Total: {formatCurrency(lineTotal)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <Label htmlFor={`dispense-quantity-${item.id}`}>Quantity *</Label>
+                <Input
+                  id={`dispense-quantity-${item.id}`}
+                  aria-label={`Quantity for ${item.medicineName}`}
+                  type="number"
+                  min="1"
+                  max={medicine?.availableStock ?? 0}
+                  className="cp-tabular"
+                  value={quantities[item.id] ?? ""}
+                  onChange={(event) => setQuantities((current) => ({ ...current, [item.id]: event.target.value }))}
+                />
+              </div>
             </div>
-            <div><Label htmlFor={`dispense-quantity-${item.id}`}>Quantity *</Label><Input id={`dispense-quantity-${item.id}`} aria-label={`Quantity for ${item.medicineName}`} type="number" min="1" max={medicine?.availableStock ?? 0} className="cp-tabular" value={quantities[item.id] ?? ""} onChange={(event) => setQuantities((current) => ({ ...current, [item.id]: event.target.value }))} /></div>
-          </div>
+          )
         })}
       </div>
-      {prescription.items.some((item) => !item.isCatalogItem || !item.medicineId) && <p className="mt-3 text-xs text-amber-800">Manual prescription items require pharmacist review and are not included in automatic stock dispensing.</p>}
-      <div className="mt-5 flex justify-end gap-2 border-t border-[var(--cp-border)] pt-4">
-        <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-        <Button
-          size="sm"
-          disabled={saving || catalogItems.length === 0}
-          onClick={async () => {
-            const items = catalogItems.map((item) => ({ prescriptionItemId: item.id, quantity: Number(quantities[item.id]) }))
-            if (items.some((item) => !Number.isInteger(item.quantity) || item.quantity <= 0)) {
-              toast({ title: "Enter a positive quantity for every catalog medicine", variant: "error" }); return
-            }
-            const stockByPrescriptionItem = new Map(catalogItems.map((item) => [
-              item.id,
-              medicines.find((medicine) => medicine.id === item.medicineId)?.availableStock ?? 0,
-            ]))
-            if (items.some((item) => item.quantity > (stockByPrescriptionItem.get(item.prescriptionItemId) ?? 0))) {
-              toast({ title: "Quantity exceeds available non-expired stock", variant: "error" }); return
-            }
-            setSaving(true); setError(null)
-            try {
-              const result = await api.dispensePrescription(prescription.id, { items })
-              await onSaved()
-              toast({ title: "Prescription dispensed", description: `Invoice ${result.sale.invoice.invoiceNumber} created.`, variant: "success" })
-              onClose()
-            }
-            catch (caught) { const message = caught instanceof Error ? caught.message : "Unable to dispense medicine"; setError(message); toast({ title: "Dispense failed", description: message, variant: "error" }) }
-            finally { setSaving(false) }
-          }}
-        >
-          {saving ? "Dispensing…" : "Dispense and create invoice"}
-        </Button>
+
+      {prescription.items.some((item) => !item.isCatalogItem || !item.medicineId) && (
+        <p className="mt-3 text-xs text-amber-800">
+          Manual prescription items require pharmacist review and are not included in automatic stock dispensing.
+        </p>
+      )}
+
+      <div className="mt-5 flex items-center justify-between border-t border-[var(--cp-border)] pt-4">
+        <div>
+          <span className="text-xs text-[var(--cp-ink-soft)]">Total Payable:</span>
+          <span className="cp-tabular ml-2 text-base font-bold text-[var(--cp-ink)]">{formatCurrency(estimatedTotal)}</span>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={saving || catalogItems.length === 0}
+            onClick={async () => {
+              const items = catalogItems.map((item) => ({ prescriptionItemId: item.id, quantity: Number(quantities[item.id]) }))
+              if (items.some((item) => !Number.isInteger(item.quantity) || item.quantity <= 0)) {
+                toast({ title: "Enter a positive quantity for every catalog medicine", variant: "error" })
+                return
+              }
+              const stockByPrescriptionItem = new Map(
+                catalogItems.map((item) => [
+                  item.id,
+                  medicines.find((medicine) => medicine.id === item.medicineId)?.availableStock ?? 0,
+                ])
+              )
+              if (items.some((item) => item.quantity > (stockByPrescriptionItem.get(item.prescriptionItemId) ?? 0))) {
+                toast({ title: "Quantity exceeds available non-expired stock", variant: "error" })
+                return
+              }
+              setSaving(true)
+              setError(null)
+              try {
+                const result = await api.dispensePrescription(prescription.id, { items })
+                await onSaved()
+                toast({ title: "Prescription dispensed", description: `Invoice ${result.sale.invoice.invoiceNumber} created.`, variant: "success" })
+                setCompletedInvoice({
+                  invoiceNumber: result.sale.invoice.invoiceNumber,
+                  invoiceId: result.sale.invoice.id,
+                })
+              } catch (caught) {
+                const message = caught instanceof Error ? caught.message : "Unable to dispense medicine"
+                setError(message)
+                toast({ title: "Dispense failed", description: message, variant: "error" })
+              } finally {
+                setSaving(false)
+              }
+            }}
+          >
+            {saving ? "Dispensing…" : "Dispense & Create Invoice"}
+          </Button>
+        </div>
       </div>
       {error && <p className="mt-3 text-sm text-[var(--cp-critical)]">{error}</p>}
     </Modal>
@@ -374,11 +526,378 @@ function AdjustModal({ target, initialOperation = "ADJUSTMENT", onClose, onSaved
   )
 }
 
+function AddPrescriptionModal({
+  open,
+  onClose,
+  medicines,
+  patients,
+  doctors,
+  onSaved,
+}: {
+  open: boolean
+  onClose: () => void
+  medicines: PharmacyMedicine[]
+  patients: Patient[]
+  doctors: Doctor[]
+  onSaved: () => Promise<void>
+}) {
+  const { toast } = useToast()
+  const [patientId, setPatientId] = React.useState("")
+  const [doctorId, setDoctorId] = React.useState("")
+  const [patientSearch, setPatientSearch] = React.useState("")
+  const [items, setItems] = React.useState<Array<{
+    medicineId?: string
+    medicineName: string
+    doseAmount: string
+    doseUnit: string
+    route: string
+    frequencyCode: string
+    durationValue: string
+    durationUnit: string
+    instructions: string
+  }>>([
+    {
+      medicineId: undefined,
+      medicineName: "",
+      doseAmount: "1",
+      doseUnit: "tablet",
+      route: "Oral",
+      frequencyCode: "OD",
+      durationValue: "5",
+      durationUnit: "days",
+      instructions: "",
+    },
+  ])
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (open) {
+      setPatientId("")
+      setDoctorId(doctors[0]?.id ?? "")
+      setPatientSearch("")
+      setItems([
+        {
+          medicineId: undefined,
+          medicineName: "",
+          doseAmount: "1",
+          doseUnit: "tablet",
+          route: "Oral",
+          frequencyCode: "OD",
+          durationValue: "5",
+          durationUnit: "days",
+          instructions: "",
+        },
+      ])
+      setError(null)
+    }
+  }, [open, doctors])
+
+  if (!open) return null
+
+  const filteredPatients = patients.filter((p) => {
+    const q = patientSearch.trim().toLowerCase()
+    return !q || p.name.toLowerCase().includes(q) || p.mrNumber.toLowerCase().includes(q) || p.phone.includes(q)
+  })
+  const selectedPatient = patients.find((p) => p.id === patientId)
+
+  const addItem = () => {
+    setItems((curr) => [
+      ...curr,
+      {
+        medicineId: undefined,
+        medicineName: "",
+        doseAmount: "1",
+        doseUnit: "tablet",
+        route: "Oral",
+        frequencyCode: "OD",
+        durationValue: "5",
+        durationUnit: "days",
+        instructions: "",
+      },
+    ])
+  }
+
+  const removeItem = (idx: number) => {
+    setItems((curr) => curr.filter((_, i) => i !== idx))
+  }
+
+  const updateItem = (idx: number, patch: Partial<(typeof items)[0]>) => {
+    setItems((curr) => curr.map((item, i) => (i === idx ? { ...item, ...patch } : item)))
+  }
+
+  const handleSave = async () => {
+    if (!patientId) {
+      setError("Please select a patient.")
+      return
+    }
+    if (!doctorId) {
+      setError("Please select a prescribing doctor.")
+      return
+    }
+    const validItems = items.filter((item) => item.medicineName.trim())
+    if (validItems.length === 0) {
+      setError("Please add at least one medicine.")
+      return
+    }
+
+    setSaving(true)
+    setError(null)
+    try {
+      await api.createPrescription({
+        patientId,
+        doctorId,
+        status: "SIGNED",
+        padData: {
+          visitNumber: "1",
+          visitDate: new Date().toISOString().slice(0, 10),
+          patientAge: selectedPatient?.age,
+          patientGender: (selectedPatient?.gender?.toUpperCase() as any) ?? "OTHER",
+          patientContact: selectedPatient?.phone || undefined,
+          patientAddress: selectedPatient?.address || undefined,
+          allergies: selectedPatient?.allergies?.length ? selectedPatient.allergies.join(", ") : undefined,
+        },
+        items: validItems.map((item) => ({
+          medicineId: item.medicineId,
+          isCatalogItem: Boolean(item.medicineId),
+          medicineName: item.medicineName.trim(),
+          doseAmount: Number(item.doseAmount) || 1,
+          doseUnit: item.doseUnit,
+          route: item.route,
+          frequencyCode: item.frequencyCode,
+          durationValue: Number(item.durationValue) || 5,
+          durationUnit: item.durationUnit,
+          instructions: item.instructions.trim() || undefined,
+        })),
+      })
+      toast({ title: "Prescription created", description: "Prescription recorded and signed.", variant: "success" })
+      await onSaved()
+      onClose()
+    } catch (caught) {
+      const msg = caught instanceof Error ? caught.message : "Unable to create prescription"
+      setError(msg)
+      toast({ title: "Failed to create prescription", description: msg, variant: "error" })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Add New Prescription" size="lg">
+      <div className="space-y-4">
+        {error && <p className="text-sm text-[var(--cp-critical)]">{error}</p>}
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <Label>Patient *</Label>
+            <div className="space-y-1">
+              <Input
+                placeholder="Search patient by name or MR#…"
+                value={patientSearch}
+                onChange={(e) => setPatientSearch(e.target.value)}
+                className="mb-1 text-xs"
+              />
+              <select
+                className="h-10 w-full rounded-xl border border-[var(--cp-border)] bg-white px-3 text-sm"
+                value={patientId}
+                onChange={(e) => setPatientId(e.target.value)}
+              >
+                <option value="">Select Patient</option>
+                {filteredPatients.slice(0, 50).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.mrNumber}) - {p.gender}, {p.age ? `${p.age}y` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {selectedPatient && (
+              <p className="mt-1 text-xs text-[var(--cp-ink-soft)]">
+                Allergies: {selectedPatient.allergies?.length ? selectedPatient.allergies.join(", ") : "None reported"}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <Label>Prescribing Doctor *</Label>
+            <select
+              className="h-10 w-full rounded-xl border border-[var(--cp-border)] bg-white px-3 text-sm"
+              value={doctorId}
+              onChange={(e) => setDoctorId(e.target.value)}
+            >
+              <option value="">Select Doctor</option>
+              {doctors.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} {d.specialization || d.department ? `(${d.specialization || d.department})` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-[var(--cp-ink)]">Prescription Medicines</h3>
+            <Button size="sm" variant="outline" onClick={addItem} type="button">
+              <Plus className="h-3.5 w-3.5 mr-1" /> Add Row
+            </Button>
+          </div>
+
+          <div className="max-h-[300px] overflow-y-auto space-y-3 pr-1">
+            {items.map((item, idx) => (
+              <div key={idx} className="rounded-xl border border-[var(--cp-border)] p-3 bg-[var(--cp-bg,#f8fafc)] space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-[var(--cp-ink-soft)]">Medicine #{idx + 1}</span>
+                  {items.length > 1 && (
+                    <button type="button" onClick={() => removeItem(idx)} className="text-[var(--cp-critical)] text-xs hover:underline">
+                      Remove
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+                  <div className="sm:col-span-2">
+                    <Label className="text-xs">Medicine Name *</Label>
+                    <input
+                      list={`pharmacy-meds-${idx}`}
+                      className="h-9 w-full rounded-lg border border-[var(--cp-border)] bg-white px-2.5 text-xs"
+                      placeholder="Type or select medicine..."
+                      value={item.medicineName}
+                      onChange={(e) => {
+                        const val = e.target.value
+                        const match = medicines.find((m) => m.name.toLowerCase() === val.toLowerCase())
+                        updateItem(idx, {
+                          medicineName: val,
+                          medicineId: match?.id,
+                        })
+                      }}
+                    />
+                    <datalist id={`pharmacy-meds-${idx}`}>
+                      {medicines.map((m) => (
+                        <option key={m.id} value={m.name}>
+                          {m.genericName ? `(${m.genericName})` : ""} - {m.currentStock} in stock
+                        </option>
+                      ))}
+                    </datalist>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs">Dose</Label>
+                    <div className="flex gap-1">
+                      <Input
+                        type="number"
+                        min="0.1"
+                        step="0.1"
+                        className="h-9 text-xs"
+                        value={item.doseAmount}
+                        onChange={(e) => updateItem(idx, { doseAmount: e.target.value })}
+                        placeholder="1"
+                      />
+                      <select
+                        className="h-9 rounded-lg border border-[var(--cp-border)] bg-white px-2 text-xs"
+                        value={item.doseUnit}
+                        onChange={(e) => updateItem(idx, { doseUnit: e.target.value })}
+                      >
+                        <option value="tablet">tablet</option>
+                        <option value="capsule">capsule</option>
+                        <option value="syrup">syrup</option>
+                        <option value="drop">drop</option>
+                        <option value="mg">mg</option>
+                        <option value="ml">ml</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs">Frequency</Label>
+                    <select
+                      className="h-9 w-full rounded-lg border border-[var(--cp-border)] bg-white px-2 text-xs"
+                      value={item.frequencyCode}
+                      onChange={(e) => updateItem(idx, { frequencyCode: e.target.value })}
+                    >
+                      <option value="OD">OD - Once daily</option>
+                      <option value="BD">BD - Twice daily</option>
+                      <option value="TDS">TDS - Three times daily</option>
+                      <option value="QID">QID - Four times daily</option>
+                      <option value="SOS">SOS - As needed</option>
+                      <option value="PRN">PRN - When required</option>
+                      <option value="STAT">STAT - Immediately</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div>
+                    <Label className="text-xs">Route</Label>
+                    <select
+                      className="h-9 w-full rounded-lg border border-[var(--cp-border)] bg-white px-2 text-xs"
+                      value={item.route}
+                      onChange={(e) => updateItem(idx, { route: e.target.value })}
+                    >
+                      <option value="Oral">Oral</option>
+                      <option value="Topical">Topical</option>
+                      <option value="IV">IV</option>
+                      <option value="IM">IM</option>
+                      <option value="Inhalation">Inhalation</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs">Duration</Label>
+                    <div className="flex gap-1">
+                      <Input
+                        type="number"
+                        min="1"
+                        className="h-9 text-xs"
+                        value={item.durationValue}
+                        onChange={(e) => updateItem(idx, { durationValue: e.target.value })}
+                        placeholder="5"
+                      />
+                      <select
+                        className="h-9 rounded-lg border border-[var(--cp-border)] bg-white px-2 text-xs"
+                        value={item.durationUnit}
+                        onChange={(e) => updateItem(idx, { durationUnit: e.target.value })}
+                      >
+                        <option value="days">days</option>
+                        <option value="weeks">weeks</option>
+                        <option value="months">months</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs">Instructions</Label>
+                    <Input
+                      className="h-9 text-xs"
+                      placeholder="e.g. After meals"
+                      value={item.instructions}
+                      onChange={(e) => updateItem(idx, { instructions: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-[var(--cp-border)] pt-4">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={saving} type="button">
+            Cancel
+          </Button>
+          <Button size="sm" onClick={handleSave} disabled={saving} type="button">
+            {saving ? "Saving…" : "Save & Sign Prescription"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export default function PharmacyDashboard({ initialSaleOpen = false }: { initialSaleOpen?: boolean }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { toast } = useToast()
-  const { currentUser } = useDashboard()
+  const { currentUser, patients, doctors } = useDashboard()
+  const [newPrescriptionOpen, setNewPrescriptionOpen] = React.useState(false)
   const [medicines, setMedicines] = React.useState<PharmacyMedicine[]>([])
   const [categories, setCategories] = React.useState<ApiMedicineCategory[]>([])
   const [stockMovements, setStockMovements] = React.useState<ReturnType<typeof toMovement>[]>([])
@@ -405,23 +924,23 @@ export default function PharmacyDashboard({ initialSaleOpen = false }: { initial
 
   React.useEffect(() => {
     if (!prescriptionToPrint) return
-    const handleAfterPrint = () => setPrescriptionToPrint(null)
-    window.addEventListener("afterprint", handleAfterPrint, { once: true })
-    const frame = window.requestAnimationFrame(() => window.print())
-    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("afterprint", handleAfterPrint) }
+    void printElement("pharmacy-print-root", {
+      afterPrint: () => setPrescriptionToPrint(null),
+    }).catch(() => setPrescriptionToPrint(null))
   }, [prescriptionToPrint])
 
   const loadPharmacy = React.useCallback(async () => {
     setLoading(true); setError(null)
     try {
-      const [medicineResponse, movementResponse, signedPrescriptionResponse, dispensedPrescriptionResponse, categoryResponse] = await Promise.all([
+      const [medicineResponse, movementResponse, signedPrescriptionResponse, partialPrescriptionResponse, dispensedPrescriptionResponse, categoryResponse] = await Promise.all([
         api.listMedicines(search, categoryFilter === "all" ? "" : categoryFilter),
         api.listStockMovements(),
         api.listPrescriptions("SIGNED"),
+        api.listPrescriptions("PARTIALLY_DISPENSED" as never),
         api.listPrescriptions("DISPENSED"),
         api.listPharmacyCategories(),
       ])
-      setMedicines(medicineResponse.map(toMedicine)); setStockMovements(movementResponse.map(toMovement)); setPrescriptions([...signedPrescriptionResponse, ...dispensedPrescriptionResponse]); setCategories(categoryResponse)
+      setMedicines(medicineResponse.map(toMedicine)); setStockMovements(movementResponse.map(toMovement)); setPrescriptions([...signedPrescriptionResponse, ...partialPrescriptionResponse, ...dispensedPrescriptionResponse]); setCategories(categoryResponse)
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to load pharmacy data") }
     finally { setLoading(false) }
   }, [categoryFilter, search])
@@ -446,13 +965,17 @@ export default function PharmacyDashboard({ initialSaleOpen = false }: { initial
   React.useEffect(() => {
     const refreshAfterMutation = (event: Event) => {
       const path = (event as CustomEvent<{ path?: string }>).detail?.path ?? ""
-      if (!path.startsWith("/pharmacy/")) return
-      void loadOverview()
-      if (/sales|batches|stock-in|dispense|return|adjust|write-off|invoices/i.test(path)) void loadPharmacy()
+      if (path.includes("prescription") || path.startsWith("/pharmacy/")) {
+        void loadOverview()
+        void loadPharmacy()
+      }
     }
     window.addEventListener("careplus:data-invalidated", refreshAfterMutation)
     return () => window.removeEventListener("careplus:data-invalidated", refreshAfterMutation)
   }, [loadOverview, loadPharmacy])
+
+  const [prescriptionSearch, setPrescriptionSearch] = React.useState("")
+  const [prescriptionStatusFilter, setPrescriptionStatusFilter] = React.useState("all")
 
   const filtered = medicines.filter((m) => {
     const q = search.trim().toLowerCase()
@@ -460,6 +983,24 @@ export default function PharmacyDashboard({ initialSaleOpen = false }: { initial
     const matchesStatus = statusFilter === "all" || m.status === statusFilter
     return matchesSearch && matchesStatus
   })
+
+  const filteredPrescriptions = React.useMemo(() => {
+    return prescriptions.filter((prescription) => {
+      const matchesStatus =
+        prescriptionStatusFilter === "all"
+          ? (prescription.status === "SIGNED" || prescription.status === "PARTIALLY_DISPENSED" || prescription.status === "DISPENSED")
+          : prescription.status === prescriptionStatusFilter
+      if (!matchesStatus) return false
+      const q = prescriptionSearch.trim().toLowerCase()
+      if (!q) return true
+      const patientName = prescription.patient ? `${prescription.patient.firstName} ${prescription.patient.lastName}`.toLowerCase() : ""
+      const mrNumber = (prescription.patient?.mrNumber ?? "").toLowerCase()
+      const doctorName = (prescription.doctor?.user.name ?? "").toLowerCase()
+      const id = prescription.id.toLowerCase()
+      const items = prescription.items.map((i) => i.medicineName.toLowerCase()).join(" ")
+      return patientName.includes(q) || mrNumber.includes(q) || doctorName.includes(q) || id.includes(q) || items.includes(q)
+    })
+  }, [prescriptions, prescriptionSearch, prescriptionStatusFilter])
 
   return (
     <div className="flex flex-col gap-4">
@@ -489,6 +1030,7 @@ export default function PharmacyDashboard({ initialSaleOpen = false }: { initial
         <div className="flex flex-wrap gap-2">
           {(currentUser?.role === "admin" || currentUser?.role === "pharmacist") && <Button onClick={() => navigate("/dashboard/pharmacy/billing")}><ShoppingCart className="h-4 w-4" /> New Sale</Button>}
           <Button variant="outline" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> Add Medicine</Button>
+          <Button variant="outline" onClick={() => { setTab("Prescriptions"); setNewPrescriptionOpen(true); }}><FileText className="h-4 w-4" /> New Prescription</Button>
           <Button variant="outline" onClick={() => navigate("/dashboard/pharmacy/reports")}><BarChart3 className="h-4 w-4" /> Reports</Button>
           <Button variant="outline" onClick={() => navigate("/dashboard/pharmacy/khata")}><Receipt className="h-4 w-4" /> Khata</Button>
         </div>
@@ -497,7 +1039,7 @@ export default function PharmacyDashboard({ initialSaleOpen = false }: { initial
       <div className="grid gap-4 xl:grid-cols-2">
         <section className="rounded-2xl border border-[var(--cp-border)] bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-base font-semibold">Recent Sales</h2><Button variant="ghost" size="sm" onClick={() => navigate("/dashboard/pharmacy/invoices")}>View all <ArrowRight className="h-4 w-4" /></Button></div>
-          {overviewLoading ? <p className="text-sm text-[var(--cp-ink-soft)]">Loading recent sales…</p> : !overview ? <p role="alert" className="text-sm text-[var(--cp-critical)]">Overview data is unavailable.</p> : !overview.recentSales.length ? <p className="text-sm text-[var(--cp-ink-soft)]">No pharmacy sales recorded yet.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-[var(--cp-ink-soft)]"><th className="py-2">Invoice</th><th className="py-2">Time</th><th className="py-2 text-right">Items</th><th className="py-2">Payment</th><th className="py-2 text-right">Amount</th></tr></thead><tbody>{overview.recentSales.map((sale) => <tr key={sale.id} className="border-b last:border-0"><td className="py-2"><button className="font-medium text-[var(--cp-primary)] hover:underline" onClick={() => navigate(`/dashboard/pharmacy/invoices/${sale.invoiceId}`)}>{sale.invoiceNumber}</button></td><td className="whitespace-nowrap py-2">{formatDateTime(sale.createdAt)}</td><td className="py-2 text-right">{sale.itemCount}</td><td className="py-2">{sale.paymentMethod.replaceAll("_", " ")}</td><td className="cp-tabular py-2 text-right">{formatCurrency(sale.amount)}</td></tr>)}</tbody></table></div>}
+          {overviewLoading ? <p className="text-sm text-[var(--cp-ink-soft)]">Loading recent sales…</p> : !overview ? <p role="alert" className="text-sm text-[var(--cp-critical)]">Overview data is unavailable.</p> : !overview.recentSales.length ? <p className="text-sm text-[var(--cp-ink-soft)]">No pharmacy sales recorded yet.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-[var(--cp-ink-soft)]"><th className="py-2">Invoice</th><th className="py-2">Time</th><th className="py-2 text-right">Items</th><th className="py-2">Payment</th><th className="py-2 text-right">Amount</th></tr></thead><tbody>{overview.recentSales.map((sale) => <tr key={sale.id} className="border-b last:border-0"><td className="py-2"><button className="inline-flex min-h-[36px] items-center px-1.5 py-1 -my-1 rounded font-medium text-[var(--cp-primary)] hover:bg-[var(--cp-primary-light)] hover:underline" onClick={() => navigate(`/dashboard/pharmacy/invoices/${sale.invoiceId}`)}>{sale.invoiceNumber}</button></td><td className="whitespace-nowrap py-2">{formatDateTime(sale.createdAt)}</td><td className="py-2 text-right">{sale.itemCount}</td><td className="py-2">{sale.paymentMethod.replaceAll("_", " ")}</td><td className="cp-tabular py-2 text-right">{formatCurrency(sale.amount)}</td></tr>)}</tbody></table></div>}
         </section>
         <section className="rounded-2xl border border-[var(--cp-warning)] bg-[var(--cp-warning-light)] p-4">
           <div className="mb-3 flex items-center justify-between gap-3"><h2 className="flex items-center gap-2 text-base font-semibold"><AlertTriangle className="h-4 w-4" /> Low-stock alerts</h2><span className="rounded-full bg-white px-2 py-1 text-xs font-semibold">{overview?.lowStock.count ?? "—"}</span></div>
@@ -505,7 +1047,9 @@ export default function PharmacyDashboard({ initialSaleOpen = false }: { initial
         </section>
       </div>
 
-      <Tabs tabs={["Inventory", "Prescriptions", "Movement History"]} active={tab} onChange={setTab} />
+      <Tabs tabs={["Inventory", "Prescriptions", "Movement History", "Issue to ward"]} active={tab} onChange={setTab} />
+
+      {tab === "Issue to ward" && <WardMedicineIssuePanel />}
 
       {tab === "Inventory" && (
         <>
@@ -594,20 +1138,51 @@ export default function PharmacyDashboard({ initialSaleOpen = false }: { initial
       )}
 
       {tab === "Prescriptions" && (
-        <><div className="flex items-center justify-end gap-2 text-xs text-[var(--cp-ink-soft)]"><label>Print format<select value={printLayout} onChange={(event) => setPrintLayout(event.target.value as PrintLayout)} className="ml-2 rounded border border-[var(--cp-border)] bg-white px-2 py-1"><option value="a4">A4</option><option value="receipt">80mm receipt</option></select></label></div><DataTable
-          rows={prescriptions.filter((prescription) => prescription.status === "SIGNED" || prescription.status === "DISPENSED")}
-          getRowKey={(prescription) => prescription.id}
-          emptyIcon={FileText}
-          emptyTitle="No active prescriptions"
-          columns={[
-            { key: "date", header: "Created", render: (prescription) => formatDateTime(prescription.createdAt) },
-            { key: "patient", header: "Patient", render: (prescription) => <span>{prescription.patient ? `${prescription.patient.firstName} ${prescription.patient.lastName}` : "—"}<span className="block text-xs text-[var(--cp-ink-soft)]">MR {prescription.patient?.mrNumber ?? "—"}</span></span> },
-            { key: "doctor", header: "Doctor", render: (prescription) => prescription.doctor?.user.name ?? "—", hideOnMobile: true },
-            { key: "items", header: "Medicines", hideOnMobile: true, render: (prescription) => <span className="flex flex-col gap-1">{prescription.items.map((item) => <span key={item.id} className="flex flex-wrap items-center gap-1"><span className="font-medium">{item.medicineName}</span><span className="text-xs text-[var(--cp-ink-soft)]">{item.doseAmount != null ? `${item.doseAmount} ${item.doseUnit ?? ""}` : item.dosage} · {item.frequencyCode ?? item.frequency} · {item.durationValue ?? item.durationDays} {item.durationUnit ?? "days"}</span>{item.requiresPharmacistReview && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900">Pharmacist review</span>}</span>)}</span> },
-            { key: "status", header: "Status", render: (prescription) => <StatusBadge status={prescription.status} tone="success" /> },
-            { key: "actions", header: "Actions", render: (prescription) => <div className="flex gap-2"><Button size="sm" disabled={prescription.status !== "SIGNED"} onClick={() => setPrescriptionToDispense(prescription)}>Dispense</Button><Button variant="outline" size="sm" onClick={async () => { setPrescriptionToPrint(await api.printPrescription(prescription.id)) }}><Printer className="h-4 w-4" /> Print</Button></div> },
-          ]}
-        />{prescriptionToPrint && <PrescriptionPrintDocument prescription={prescriptionToPrint} layout={printLayout} />}</>
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-2">
+            <FilterBar search={prescriptionSearch} onSearchChange={setPrescriptionSearch} searchPlaceholder="Search patient, MR#, doctor, or medicine…">
+              <FilterSelect
+                label="Status"
+                value={prescriptionStatusFilter}
+                onChange={setPrescriptionStatusFilter}
+                options={[
+                  { value: "all", label: "All Active (Signed / Dispensed)" },
+                  { value: "SIGNED", label: "Signed / Pending Dispense" },
+                  { value: "PARTIALLY_DISPENSED", label: "Partially Dispensed" },
+                  { value: "DISPENSED", label: "Dispensed" },
+                ]}
+              />
+            </FilterBar>
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={() => setNewPrescriptionOpen(true)} className="gap-1.5">
+                <Plus className="h-4 w-4" /> New Prescription
+              </Button>
+              <label className="flex items-center text-xs text-[var(--cp-ink-soft)]">
+                Print
+                <select value={printLayout} onChange={(event) => setPrintLayout(event.target.value as PrintLayout)} className="ml-2 rounded border border-[var(--cp-border)] bg-white px-2 py-1">
+                  <option value="a4">A4</option>
+                  <option value="receipt">80mm receipt</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <DataTable
+            rows={filteredPrescriptions}
+            getRowKey={(prescription) => prescription.id}
+            emptyIcon={FileText}
+            emptyTitle={prescriptionSearch || prescriptionStatusFilter !== "all" ? "No matching prescriptions" : "No active prescriptions"}
+            pageSize={15}
+            columns={[
+              { key: "date", header: "Created", render: (prescription) => formatDateTime(prescription.createdAt) },
+              { key: "patient", header: "Patient", render: (prescription) => <span>{prescription.patient ? `${prescription.patient.firstName} ${prescription.patient.lastName}` : "—"}<span className="block text-xs text-[var(--cp-ink-soft)]">MR {prescription.patient?.mrNumber ?? "—"}</span></span> },
+              { key: "doctor", header: "Doctor", render: (prescription) => prescription.doctor?.user.name ?? "—", hideOnMobile: true },
+              { key: "items", header: "Medicines", hideOnMobile: true, render: (prescription) => <span className="flex flex-col gap-1">{prescription.items.map((item) => <span key={item.id} className="flex flex-wrap items-center gap-1"><span className="font-medium">{item.medicineName}</span><span className="text-xs text-[var(--cp-ink-soft)]">{item.doseAmount != null ? `${item.doseAmount} ${item.doseUnit ?? ""}` : item.dosage} · {item.frequencyCode ?? item.frequency} · {item.durationValue ?? item.durationDays} {item.durationUnit ?? "days"}</span>{item.requiresPharmacistReview && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900">Pharmacist review</span>}</span>)}</span> },
+              { key: "status", header: "Status", render: (prescription) => <StatusBadge status={prescription.status} tone={prescription.status === "DISPENSED" ? "success" : "warning"} /> },
+              { key: "actions", header: "Actions", render: (prescription) => <div className="flex gap-2"><Button size="sm" disabled={prescription.status !== "SIGNED" && prescription.status !== "PARTIALLY_DISPENSED"} onClick={() => setPrescriptionToDispense(prescription)}>Dispense</Button><Button variant="outline" size="sm" onClick={async () => { setPrescriptionToPrint(await api.printPrescription(prescription.id)) }}><Printer className="h-4 w-4" /> Print</Button></div> },
+            ]}
+          />
+          {prescriptionToPrint && <PrescriptionPrintDocument prescription={prescriptionToPrint} layout={printLayout} />}
+        </>
       )}
 
       <AddMedicineModal open={addOpen} onClose={() => setAddOpen(false)} onSaved={loadPharmacy} />
@@ -616,6 +1191,7 @@ export default function PharmacyDashboard({ initialSaleOpen = false }: { initial
       <StockInModal medicine={stockInTarget} onClose={() => setStockInTarget(null)} onSaved={loadPharmacy} />
       <DispensePrescriptionModal prescription={prescriptionToDispense} medicines={medicines} onClose={() => setPrescriptionToDispense(null)} onSaved={loadPharmacy} />
       <AdjustModal target={adjustTarget} initialOperation={adjustOperation} onClose={() => setAdjustTarget(null)} onSaved={loadPharmacy} />
+      <AddPrescriptionModal open={newPrescriptionOpen} onClose={() => setNewPrescriptionOpen(false)} medicines={medicines} patients={patients} doctors={doctors} onSaved={loadPharmacy} />
     </div>
   )
 }

@@ -14,6 +14,7 @@ import { departments } from "@/data/departments"
 import { services } from "@/data/services"
 import { api, apiAssetUrl, type ApiError } from "@/lib/api"
 import { useHospitalProfile } from "@/lib/hospitalProfile"
+import { printElement } from "@/lib/print"
 
 interface FormState {
   departmentId: string
@@ -22,6 +23,7 @@ interface FormState {
   date: string
   time: string
   fullName: string
+  gender: "MALE" | "FEMALE" | "OTHER" | ""
   phone: string
   email: string
   age: string
@@ -61,6 +63,7 @@ export default function Appointment() {
     date: "",
     time: "",
     fullName: "",
+    gender: "",
     phone: "",
     email: "",
     age: "",
@@ -108,6 +111,7 @@ export default function Appointment() {
     }
     if (current === 3) {
       if (!form.fullName.trim()) newErrors.fullName = "Enter your full name"
+      if (!form.gender) newErrors.gender = "Select your gender"
       if (!/^\+?[0-9][0-9\s-]{6,18}$/.test(form.phone.trim())) newErrors.phone = "Enter a valid phone number"
       const ageValue = Number(form.age)
       if (!form.age || Number.isNaN(ageValue) || !Number.isInteger(ageValue) || ageValue < 0 || ageValue > 120) newErrors.age = "Enter a valid age between 0 and 120"
@@ -130,7 +134,8 @@ export default function Appointment() {
       try {
         const appointment = await api.createPublicAppointment({
           fullName: form.fullName.trim(),
-          phone: form.phone.trim(),
+          gender: form.gender as "MALE" | "FEMALE" | "OTHER",
+          phone: form.phone.trim().replace(/[\s-]/g, ""),
           ...(form.email.trim() ? { email: form.email.trim() } : {}),
           age: Number(form.age),
           doctorId: form.doctorId,
@@ -167,6 +172,9 @@ export default function Appointment() {
   if (confirmed) {
     const dept = publicDepartments.find((d) => d.id === confirmed.form.departmentId) ?? departments.find((d) => d.id === confirmed.form.departmentId)
     const doc = publicDoctors.find((d) => d.id === confirmed.form.doctorId)
+    const genderLabel = confirmed.form.gender === "MALE" ? "Male" : confirmed.form.gender === "FEMALE" ? "Female" : "Other"
+    const feeDisplay = doc?.consultationFee ? `PKR ${Number(doc.consultationFee).toLocaleString()}` : "Standard OPD Fee"
+
     return (
       <div className="mx-auto max-w-2xl px-4 py-16 sm:px-6 lg:px-8">
         <motion.div
@@ -180,32 +188,39 @@ export default function Appointment() {
                 {hospitalProfile.logoUrl ? <img src={apiAssetUrl(hospitalProfile.logoUrl)} alt="" /> : <HeartPulse />}
               </div>
               <div>
-                <strong>{hospitalProfile.name}</strong>
-                <span>Appointment Confirmation</span>
+                <strong>{hospitalProfile.name || "CarePlus Hospital"}</strong>
+                <span>Official Appointment Booking Slip</span>
               </div>
             </div>
-            <div className="bg-[var(--color-accent)] px-8 py-8 text-center text-white">
-              <CheckCircle2 className="mx-auto mb-3 h-10 w-10" />
+            <div className="bg-[var(--color-primary)] px-8 py-7 text-center text-white">
+              <CheckCircle2 className="mx-auto mb-2 h-9 w-9 text-white" />
               <h1 className="font-[var(--font-display)] text-2xl font-bold">Appointment Requested</h1>
-              <p className="mt-1 text-sm text-white/85">Your request is pending staff confirmation.</p>
+              <p className="mt-1 text-sm text-white/90">Please present this slip at the reception desk upon arrival.</p>
             </div>
-            <div className="space-y-4 p-8 print:p-0">
-              <div className="flex items-center justify-between border-b border-[var(--color-border-soft)] pb-4">
-                <span className="text-sm text-[var(--color-ink-soft)]">Reference Number</span>
+            <div className="space-y-3.5 p-8 print:p-4">
+              <div className="flex items-center justify-between border-b border-[var(--color-border-soft)] pb-3">
+                <span className="text-sm font-medium text-[var(--color-ink-soft)]">Reference Number</span>
                 <span className="font-[var(--font-data)] font-bold text-[var(--color-primary)]">{confirmed.appointmentId.slice(0, 8).toUpperCase()}</span>
               </div>
-              <Row label="Token" value={`#${confirmed.tokenNumber}`} />
-              <Row label="Patient" value={confirmed.form.fullName} />
-              <Row label="Department" value={doc?.department?.name ?? dept?.name ?? "—"} />
-              <Row label="Doctor" value={doc?.user.name ?? "Any available specialist"} />
-              <Row label="Date" value={confirmed.form.date} />
-              <Row label="Time" value={confirmed.form.time} />
-              <Row label="Phone" value={confirmed.form.phone} />
-              {confirmed.form.reason && <Row label="Reason for visit" value={confirmed.form.reason} />}
+              <Row label="Token Number" value={`#${confirmed.tokenNumber}`} />
+              <Row label="Patient Name" value={confirmed.form.fullName} />
+              <Row label="Gender / Age" value={`${genderLabel} · ${confirmed.form.age} years`} />
+              <Row label="Contact Phone" value={confirmed.form.phone} />
+              <Row label="Specialist / Doctor" value={doc?.user.name ?? "Any available specialist"} />
+              <Row label="Department" value={doc?.department?.name ?? dept?.name ?? "General Medicine"} />
+              <Row label="Consultation Fee" value={feeDisplay} />
+              <Row label="Appointment Date" value={confirmed.form.date} />
+              <Row label="Time Slot" value={formatTimeSlot(confirmed.form.time)} />
+              <Row label="Payment Status" value="Payable at Hospital Reception on Arrival" />
+              {confirmed.form.reason && <Row label="Reason for Visit" value={confirmed.form.reason} />}
             </div>
             <div className="no-print flex gap-3 border-t border-[var(--color-border-soft)] p-6">
-              <Button variant="outline" className="flex-1" onClick={() => window.print()}>
-                <Printer className="h-4 w-4" /> Print Confirmation
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => void printElement("confirmation-print", { title: `BookingSlip-${confirmed.tokenNumber}` })}
+              >
+                <Printer className="h-4 w-4" /> Print Confirmation Slip
               </Button>
               <Button
                 variant="primary"
@@ -213,7 +228,7 @@ export default function Appointment() {
                 onClick={() => {
                   setConfirmed(null)
                   setStep(1)
-                  setForm({ departmentId: "", doctorId: "", serviceId: "", date: "", time: "", fullName: "", phone: "", email: "", age: "", reason: "" })
+                  setForm({ departmentId: "", doctorId: "", serviceId: "", date: "", time: "", fullName: "", gender: "", phone: "", email: "", age: "", reason: "" })
                 }}
               >
                 Book Another
@@ -318,10 +333,10 @@ export default function Appointment() {
                           <button
                             type="button"
                             key={slot}
-                            onClick={() => update("time", formatTimeSlot(slot))}
+                            onClick={() => update("time", slot)}
                             className={`rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors duration-200 ${
                               form.time === slot
-                                ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] text-[var(--color-primary)]"
+                                ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] text-[var(--color-primary)] ring-2 ring-[var(--color-primary)] font-semibold shadow-sm"
                                 : "border-[var(--color-border-soft)] text-[var(--color-ink-soft)] hover:border-[var(--color-accent)]"
                             }`}
                           >
@@ -329,6 +344,12 @@ export default function Appointment() {
                           </button>
                         ))}
                       </div>
+                      {form.time && (
+                        <div className="mt-3 flex items-center justify-between rounded-xl bg-[var(--color-primary-light)] px-4 py-2.5 text-xs font-semibold text-[var(--color-primary)]">
+                          <span>Selected Time Slot: {formatTimeSlot(form.time)}</span>
+                          <span className="font-normal text-[var(--color-ink-soft)]">{form.date}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -345,14 +366,23 @@ export default function Appointment() {
                         <Input id="fullName" placeholder="e.g. Ali Hassan" value={form.fullName} onChange={(e) => update("fullName", e.target.value)} error={Boolean(errors.fullName)} />
                       </div>
                       <div>
-                        <Label htmlFor="phone">Phone number {errors.phone && <span className="text-[var(--color-emergency)]">— {errors.phone}</span>}</Label>
-                        <Input id="phone" placeholder="0300 1234567" value={form.phone} onChange={(e) => update("phone", e.target.value)} error={Boolean(errors.phone)} />
+                        <Label htmlFor="gender">Gender {errors.gender && <span className="text-[var(--color-emergency)]">— {errors.gender}</span>}</Label>
+                        <Select id="gender" value={form.gender} onChange={(e) => update("gender", e.target.value as FormState["gender"])} error={Boolean(errors.gender)}>
+                          <option value="">Select gender</option>
+                          <option value="MALE">Male</option>
+                          <option value="FEMALE">Female</option>
+                          <option value="OTHER">Other</option>
+                        </Select>
                       </div>
                       <div>
                         <Label htmlFor="age">Age {errors.age && <span className="text-[var(--color-emergency)]">— {errors.age}</span>}</Label>
                         <Input id="age" type="number" min={0} max={120} step={1} placeholder="e.g. 32" value={form.age} onChange={(e) => update("age", e.target.value)} error={Boolean(errors.age)} />
                       </div>
-                      <div className="sm:col-span-2">
+                      <div>
+                        <Label htmlFor="phone">Phone number {errors.phone && <span className="text-[var(--color-emergency)]">— {errors.phone}</span>}</Label>
+                        <Input id="phone" placeholder="0300 1234567" value={form.phone} onChange={(e) => update("phone", e.target.value)} error={Boolean(errors.phone)} />
+                      </div>
+                      <div>
                         <Label htmlFor="email">Email (optional)</Label>
                         <Input id="email" type="email" placeholder="you@example.com" value={form.email} onChange={(e) => update("email", e.target.value)} />
                       </div>
@@ -365,7 +395,7 @@ export default function Appointment() {
                     <div className="rounded-xl bg-[var(--color-primary-light)] p-4 text-sm text-[var(--color-primary)]">
                       <div className="mb-1 flex items-center gap-1.5 font-semibold"><FileText className="h-4 w-4" /> Summary</div>
                       <p className="text-[var(--color-ink-soft)]">
-                        {selectedDept?.name ?? "Any department"} · {selectedDoctor?.user.name ?? "Any specialist"} · {form.date || "—"} at {form.time || "—"}
+                        {selectedDept?.name ?? "Any department"} · {selectedDoctor?.user.name ?? "Any specialist"} · {form.date || "—"} at {form.time ? formatTimeSlot(form.time) : "—"}
                         {selectedService ? ` · ${selectedService.name}` : ""}
                       </p>
                     </div>
@@ -390,7 +420,9 @@ export default function Appointment() {
 }
 
 function toApiTime(time: string) {
-  const [value, meridiem] = time.split(" ")
+  const trimmed = time.trim()
+  if (/^\d{2}:\d{2}$/.test(trimmed)) return trimmed
+  const [value, meridiem] = trimmed.split(" ")
   let [hours, minutes] = value.split(":").map(Number)
   if (meridiem === "PM" && hours !== 12) hours += 12
   if (meridiem === "AM" && hours === 12) hours = 0

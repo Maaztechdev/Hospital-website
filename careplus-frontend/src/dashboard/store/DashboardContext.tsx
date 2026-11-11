@@ -1,3 +1,4 @@
+import { initRealtime } from "@/lib/realtime"
 import * as React from "react"
 import type {
   Role, Patient, Appointment, AppointmentStatus, LabOrder, LabOrderStatus, Doctor,
@@ -5,9 +6,9 @@ import type {
   Bed, BedStatus, Admission, TransferRecord, Surgery, OTStatus, AuditLogEntry, AuditActionType,
 } from "@/dashboard/types"
 import { generateId } from "@/dashboard/lib/format"
-import { api, getAccessToken, getSessionVersion, subscribeToSession, toAppointment, toBed, toDoctor, toAdmission, toInvoice, toLabOrder, toPatient, toSurgery, type ApiMedicine, type ApiStockMovement } from "@/lib/api"
+import { api, getAccessToken, getSessionVersion, subscribeToSession, keepSessionSignedIn, toAppointment, toBed, toDoctor, toAdmission, toInvoice, toLabOrder, toPatient, toSurgery, type ApiMedicine, type ApiStockMovement, type ApiListAppointmentsParams } from "@/lib/api"
 import { DashboardContext } from "./dashboard-context"
-import { can } from "@/dashboard/permissions"
+import { can, setStoredPermissions } from "@/dashboard/permissions"
 
 export interface CurrentUser {
   id: string
@@ -54,6 +55,7 @@ type Action =
   | { type: "SET_BEDS"; beds: Bed[] }
   | { type: "SET_ADMISSIONS"; admissions: Admission[] }
   | { type: "SET_SURGERIES"; surgeries: Surgery[] }
+  | { type: "UPSERT_SURGERY"; surgery: Surgery }
   | { type: "UPSERT_INVOICE"; invoice: Invoice }
   | { type: "SET_AUDIT_LOGS"; auditLogs: AuditLogEntry[] }
   | { type: "UPDATE_APPOINTMENT_STATUS"; id: string; status: AppointmentStatus; rejectionReason?: string }
@@ -178,6 +180,15 @@ function reducer(state: DashboardState, action: Action): DashboardState {
       return { ...state, admissions: action.admissions }
     case "SET_SURGERIES":
       return { ...state, surgeries: action.surgeries }
+    case "UPSERT_SURGERY": {
+      const exists = state.surgeries.some((surgery) => surgery.id === action.surgery.id)
+      return {
+        ...state,
+        surgeries: exists
+          ? state.surgeries.map((surgery) => surgery.id === action.surgery.id ? action.surgery : surgery)
+          : [action.surgery, ...state.surgeries],
+      }
+    }
     case "UPSERT_INVOICE": {
       const exists = state.invoices.some((invoice) => invoice.id === action.invoice.id)
       return { ...state, invoices: exists ? state.invoices.map((invoice) => invoice.id === action.invoice.id ? action.invoice : invoice) : [action.invoice, ...state.invoices] }
@@ -491,13 +502,14 @@ export interface DashboardContextValue extends DashboardState {
   hydratedUserId: string | null
   dataError: string | null
   clearDataError: () => void
-  refreshAppointments: (sort?: "date" | "recentlyCreated") => Promise<void>
+  refreshAppointments: (sort?: "date" | "recentlyCreated", extraParams?: ApiListAppointmentsParams) => Promise<void>
   refreshWardState: () => Promise<void>
+  refreshDashboardData: (options?: { silent?: boolean }) => Promise<void>
 }
 
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = React.useReducer(reducer, initialState)
-  const [authReady, setAuthReady] = React.useState(!getAccessToken())
+  const [authReady, setAuthReady] = React.useState(false)
   const [dataLoading, setDataLoading] = React.useState(Boolean(getAccessToken()))
   const [hydratedUserId, setHydratedUserId] = React.useState<string | null>(null)
   const [dataError, setDataError] = React.useState<string | null>(null)
@@ -506,13 +518,17 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const loadedUserId = React.useRef<string | null>(null)
   const loadingToken = React.useRef<string | null>(null)
   const loadVersion = React.useRef(0)
+  const silentRefreshAttempted = React.useRef(false)
 
-  const refreshAppointments = React.useCallback(async (sort: "date" | "recentlyCreated" = "date") => {
-    const response = await api.listAppointments({ sort })
+  const refreshAppointments = React.useCallback(async (sort: "date" | "recentlyCreated" = "date", extraParams: ApiListAppointmentsParams = {}) => {
+    const response = await api.listAppointments({ sort, limit: 100, ...extraParams })
     dispatch({ type: "SET_APPOINTMENTS", appointments: response.map(toAppointment) })
   }, [])
 
-  React.useEffect(() => subscribeToSession(() => setAuthTick((tick) => tick + 1)), [])
+  React.useEffect(() => {
+    initRealtime()
+    return subscribeToSession(() => setAuthTick((tick) => tick + 1))
+  }, [])
 
   const refreshWardState = React.useCallback(async () => {
     const [bedResponse, admissionResponse] = await Promise.all([api.listBedAvailability(), api.listAdmissions()])
@@ -520,9 +536,120 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: "SET_ADMISSIONS", admissions: admissionResponse.map(toAdmission) })
   }, [])
 
-  React.useEffect(() => {
+  const refreshDashboardData = React.useCallback(async (options?: { silent?: boolean }) => {
     const accessToken = getAccessToken()
-    if (!accessToken) {
+    if (!accessToken) return
+    const currentLoad = ++loadVersion.current
+    const currentSession = getSessionVersion()
+    if (!options?.silent) {
+      setDataLoading(true)
+      setDataError(null)
+    }
+    try {
+      const user = await api.me()
+      if (currentLoad !== loadVersion.current || getSessionVersion() !== currentSession || getAccessToken() !== accessToken) return
+      if (!state.currentUser || state.currentUser.id !== user.id) {
+        dispatch({ type: "LOGIN", user: { id: user.id, name: user.name, email: user.email, role: user.role.toLowerCase() as Role } })
+      }
+      try {
+        const storedPerms = await api.listRolePermissions()
+        setStoredPermissions(storedPerms)
+      } catch {
+        // keep existing or cached permissions
+      }
+      const role = user.role.toLowerCase() as Role
+      const canViewInvoices = can(role, "billing", "view")
+      const canViewAppointments = can(role, "appointments", "view")
+      const canViewLab = can(role, "lab", "view")
+      const canViewPharmacy = can(role, "pharmacy", "view")
+      const canViewStockMovements = ["ADMIN", "PHARMACIST"].includes(user.role)
+      const canViewWard = can(role, "ward", "view")
+      const results = await Promise.allSettled([
+        can(role, "patients", "view") ? api.listPatients() : Promise.resolve([]),
+        api.listDoctors(),
+        canViewAppointments ? api.listAppointments({ limit: 100 }) : Promise.resolve([]),
+        canViewLab ? api.listLabOrders() : Promise.resolve([]),
+        canViewPharmacy ? api.listMedicines() : Promise.resolve([]),
+        canViewStockMovements ? api.listStockMovements() : Promise.resolve([]),
+        canViewInvoices ? api.listInvoices() : Promise.resolve([]),
+        user.role === "ADMIN" ? api.listAuditLogs() : Promise.resolve([]),
+        canViewWard ? api.listBedAvailability() : Promise.resolve([]),
+        canViewWard ? api.listAdmissions() : Promise.resolve([]),
+        ["ADMIN", "DOCTOR", "NURSE"].includes(user.role) ? api.listSurgeries() : Promise.resolve([]),
+      ])
+      const valueOr = <T,>(result: PromiseSettledResult<T>, fallback: T) => result.status === "fulfilled" ? result.value : fallback
+      const patients = valueOr(results[0], [])
+      const doctors = valueOr(results[1], [])
+      const appointments = valueOr(results[2], [])
+      const labOrders = valueOr(results[3], [])
+      const medicines = valueOr(results[4], [])
+      const stockMovements = valueOr(results[5], [])
+      const invoices = valueOr(results[6], [])
+      const auditResponse = valueOr(results[7], [])
+      const beds = valueOr(results[8], [])
+      const admissions = valueOr(results[9], [])
+      const surgeries = valueOr(results[10], [])
+      const firstFailure = results.find((result) => result.status === "rejected")
+      if (firstFailure?.status === "rejected" && !options?.silent) {
+        setDataError(firstFailure.reason instanceof Error ? firstFailure.reason.message : "Some dashboard data could not be loaded")
+      }
+      if (currentLoad !== loadVersion.current || getSessionVersion() !== currentSession || getAccessToken() !== accessToken) return
+      const dashboardPatients = patients.map(toPatient)
+      const dashboardDoctors = doctors.map((doctor) => toDoctor(doctor))
+      dispatch({ type: "SET_PATIENTS", patients: dashboardPatients })
+      dispatch({ type: "SET_DOCTORS", doctors: dashboardDoctors })
+      dispatch({ type: "SET_APPOINTMENTS", appointments: appointments.map((appointment) => toAppointment(appointment)) })
+      dispatch({ type: "SET_BEDS", beds: beds.map(toBed) })
+      dispatch({ type: "SET_ADMISSIONS", admissions: admissions.map(toAdmission) })
+      dispatch({ type: "SET_SURGERIES", surgeries: surgeries.map(toSurgery) })
+      dispatch({
+        type: "SET_LAB_ORDERS",
+        labOrders: labOrders.map((order) =>
+          toLabOrder(order, {
+            mrNumber: dashboardPatients.find((patient) => patient.id === order.patientId)?.mrNumber,
+            patientName: dashboardPatients.find((patient) => patient.id === order.patientId)?.name,
+            doctorName: dashboardDoctors.find((doctor) => doctor.id === order.doctorId)?.name,
+          })
+        ),
+      })
+      dispatch({ type: "SET_MEDICINES", medicines: medicines.map(toMedicine) })
+      dispatch({ type: "SET_STOCK_MOVEMENTS", stockMovements: stockMovements.map(toStockMovement) })
+      dispatch({ type: "SET_INVOICES", invoices: invoices.map((invoice) => toInvoice(invoice, dashboardPatients.find((patient) => patient.id === invoice.patientId))) })
+      dispatch({
+        type: "SET_AUDIT_LOGS",
+        auditLogs: auditResponse.map((entry) => ({
+          id: entry.id,
+          actionType: entry.action as AuditActionType,
+          action: entry.action,
+          entity: entry.entityType,
+          entityId: entry.entityId,
+          by: entry.user?.name ?? "System",
+          role: entry.user?.role ?? "System",
+          date: entry.createdAt,
+          details: typeof entry.details === "string" ? entry.details : undefined,
+        })),
+      })
+      setHydratedUserId(user.id)
+      loadedUserId.current = user.id
+    } catch (error) {
+      if (currentLoad !== loadVersion.current || getSessionVersion() !== currentSession || getAccessToken() !== accessToken) return
+      if (!options?.silent) {
+        setHydratedUserId(loadedUserId.current)
+        setDataError(error instanceof Error ? error.message : "Unable to load dashboard data")
+      }
+    } finally {
+      if (currentLoad === loadVersion.current) {
+        loadingToken.current = null
+        setDataLoading(false)
+        setAuthReady(true)
+      }
+    }
+  }, [state.currentUser])
+
+  React.useEffect(() => {
+    let active = true
+    const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
+    if (isLoginPage) {
       loadedUserId.current = null
       loadingToken.current = null
       loadVersion.current += 1
@@ -531,101 +658,88 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       setAuthReady(true)
       return
     }
+    const accessToken = getAccessToken()
+    if (!accessToken) {
+      if (!silentRefreshAttempted.current) {
+        silentRefreshAttempted.current = true
+        void keepSessionSignedIn().then((refreshed) => {
+          if (!active) return
+          if (!refreshed) {
+            loadedUserId.current = null
+            loadingToken.current = null
+            loadVersion.current += 1
+            setDataLoading(false)
+            setHydratedUserId(null)
+            setAuthReady(true)
+          }
+        })
+      } else {
+        loadedUserId.current = null
+        loadingToken.current = null
+        loadVersion.current += 1
+        setDataLoading(false)
+        setHydratedUserId(null)
+        setAuthReady(true)
+      }
+      return () => { active = false }
+    }
+    silentRefreshAttempted.current = false
     if (state.currentUser?.id && loadedUserId.current === state.currentUser.id) return
-    if (loadingToken.current === accessToken) return
-    loadingToken.current = accessToken
-    const currentLoad = ++loadVersion.current
-    const currentSession = getSessionVersion()
-    setDataLoading(true)
-    setDataError(null)
-    setHydratedUserId(null)
-    api.me()
-      .then(async (user) => {
-        if (currentLoad !== loadVersion.current || getSessionVersion() !== currentSession || getAccessToken() !== accessToken) return
-        if (loadedUserId.current === user.id) return
-        loadedUserId.current = user.id
-        dispatch({ type: "LOGIN", user: { id: user.id, name: user.name, email: user.email, role: user.role.toLowerCase() as Role } })
-        const role = user.role.toLowerCase() as Role
-        const canViewInvoices = can(role, "billing", "view")
-        const canViewAppointments = can(role, "appointments", "view")
-        const canViewLab = can(role, "lab", "view")
-        const canViewPharmacy = can(role, "pharmacy", "view")
-        const canViewStockMovements = ["ADMIN", "PHARMACIST"].includes(user.role)
-        const canViewWard = can(role, "ward", "view")
-        const results = await Promise.allSettled([
-          can(role, "patients", "view") ? api.listPatients() : Promise.resolve([]),
-          api.listDoctors(),
-          canViewAppointments ? api.listAppointments() : Promise.resolve([]),
-          canViewLab ? api.listLabOrders() : Promise.resolve([]),
-          canViewPharmacy ? api.listMedicines() : Promise.resolve([]),
-          canViewStockMovements ? api.listStockMovements() : Promise.resolve([]),
-          canViewInvoices ? api.listInvoices() : Promise.resolve([]),
-          user.role === "ADMIN" ? api.listAuditLogs() : Promise.resolve([]),
-          canViewWard ? api.listBedAvailability() : Promise.resolve([]),
-          canViewWard ? api.listAdmissions() : Promise.resolve([]),
-          ["ADMIN", "DOCTOR", "NURSE"].includes(user.role) ? api.listSurgeries() : Promise.resolve([]),
-        ])
-        const valueOr = <T,>(result: PromiseSettledResult<T>, fallback: T) => result.status === "fulfilled" ? result.value : fallback
-        const patients = valueOr(results[0], [])
-        const doctors = valueOr(results[1], [])
-        const appointments = valueOr(results[2], [])
-        const labOrders = valueOr(results[3], [])
-        const medicines = valueOr(results[4], [])
-        const stockMovements = valueOr(results[5], [])
-        const invoices = valueOr(results[6], [])
-        const auditResponse = valueOr(results[7], [])
-        const beds = valueOr(results[8], [])
-        const admissions = valueOr(results[9], [])
-        const surgeries = valueOr(results[10], [])
-        const firstFailure = results.find((result) => result.status === "rejected")
-        if (firstFailure?.status === "rejected") setDataError(firstFailure.reason instanceof Error ? firstFailure.reason.message : "Some dashboard data could not be loaded")
-        if (currentLoad !== loadVersion.current || getSessionVersion() !== currentSession || getAccessToken() !== accessToken) return
-        dispatch({ type: "SET_PATIENTS", patients: patients.map(toPatient) })
-        dispatch({ type: "SET_DOCTORS", doctors: doctors.map((doctor) => toDoctor(doctor)) })
-        dispatch({ type: "SET_APPOINTMENTS", appointments: appointments.map((appointment) => toAppointment(appointment)) })
-        dispatch({ type: "SET_BEDS", beds: beds.map(toBed) })
-        dispatch({ type: "SET_ADMISSIONS", admissions: admissions.map(toAdmission) })
-        dispatch({ type: "SET_SURGERIES", surgeries: surgeries.map(toSurgery) })
-        const dashboardPatients = patients.map(toPatient)
-        const dashboardDoctors = doctors.map((doctor) => toDoctor(doctor))
-        dispatch({ type: "SET_LAB_ORDERS", labOrders: labOrders.map((order) => toLabOrder(order, {
-          mrNumber: dashboardPatients.find((patient) => patient.id === order.patientId)?.mrNumber,
-          patientName: dashboardPatients.find((patient) => patient.id === order.patientId)?.name,
-          doctorName: dashboardDoctors.find((doctor) => doctor.id === order.doctorId)?.name,
-        })) })
-        dispatch({ type: "SET_MEDICINES", medicines: medicines.map(toMedicine) })
-        dispatch({ type: "SET_STOCK_MOVEMENTS", stockMovements: stockMovements.map(toStockMovement) })
-        dispatch({ type: "SET_INVOICES", invoices: invoices.map((invoice) => toInvoice(invoice, dashboardPatients.find((patient) => patient.id === invoice.patientId))) })
-              dispatch({ type: "SET_AUDIT_LOGS", auditLogs: auditResponse.map((entry) => ({
-                id: entry.id,
-                actionType: entry.action as AuditActionType,
-                action: entry.action,
-                entity: entry.entityType,
-                entityId: entry.entityId,
-                by: entry.user?.name ?? "System",
-                role: entry.user?.role ?? "System",
-                date: entry.createdAt,
-                details: typeof entry.details === "string" ? entry.details : undefined,
-              })) })
-              setHydratedUserId(user.id)
-      })
-      .catch((error: Error) => {
-        if (currentLoad !== loadVersion.current || getSessionVersion() !== currentSession || getAccessToken() !== accessToken) return
-        setHydratedUserId(loadedUserId.current)
-        setDataError(error.message || "Unable to load dashboard data")
-      })
-      .finally(() => {
-        if (currentLoad === loadVersion.current) {
-          loadingToken.current = null
-          setDataLoading(false)
-          setAuthReady(true)
-        }
-      })
-  }, [state.currentUser?.id, refreshWardState, authTick])
+    void refreshDashboardData()
+  }, [state.currentUser?.id, authTick, refreshDashboardData])
 
-  const value = React.useMemo(() => ({ ...state, dispatch, authReady, dataLoading, hydratedUserId, dataError, clearDataError, refreshAppointments, refreshWardState }), [state, authReady, dataLoading, hydratedUserId, dataError, clearDataError, refreshAppointments, refreshWardState])
+  // Real-time synchronization: debounce re-fetch when data changes anywhere
+  React.useEffect(() => {
+    let debounceTimer: number | null = null
+    const handleInvalidation = () => {
+      if (!getAccessToken()) return
+      if (debounceTimer) window.clearTimeout(debounceTimer)
+      debounceTimer = window.setTimeout(() => {
+        void refreshDashboardData({ silent: true })
+      }, 150)
+    }
+    window.addEventListener("careplus:data-invalidated", handleInvalidation)
+    return () => {
+      if (debounceTimer) window.clearTimeout(debounceTimer)
+      window.removeEventListener("careplus:data-invalidated", handleInvalidation)
+    }
+  }, [refreshDashboardData])
+
+  // Background fallback polling (every 30s + on tab focus) to complement real-time SSE
+  React.useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (typeof document !== "undefined" && getAccessToken()) {
+        void refreshDashboardData({ silent: true })
+      }
+    }, 30000)
+    const handleFocus = () => {
+      if (typeof document !== "undefined" && getAccessToken()) {
+        void refreshDashboardData({ silent: true })
+      }
+    }
+    window.addEventListener("focus", handleFocus)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener("focus", handleFocus)
+    }
+  }, [refreshDashboardData])
+
+  const value = React.useMemo(
+    () => ({
+      ...state,
+      dispatch,
+      authReady,
+      dataLoading,
+      hydratedUserId,
+      dataError,
+      clearDataError,
+      refreshAppointments,
+      refreshWardState,
+      refreshDashboardData,
+    }),
+    [state, authReady, dataLoading, hydratedUserId, dataError, clearDataError, refreshAppointments, refreshWardState, refreshDashboardData]
+  )
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>
 }
 
 export { useDashboard } from "./useDashboard"
-

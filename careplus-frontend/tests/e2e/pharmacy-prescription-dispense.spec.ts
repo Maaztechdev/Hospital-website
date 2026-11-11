@@ -112,7 +112,7 @@ test("pharmacy displays prescription patient and doctor and invoices a FEFO disp
     })
   })
 
-  await openDashboard(page, session, "/dashboard/pharmacy")
+  await openDashboard(page, session, "/dashboard/pharmacy?section=work-items")
   await page.getByText("Prescriptions", { exact: true }).last().click()
   const row = page.getByRole("row").filter({ hasText: "E2E Pharmacy Medicine 10 mg" })
   await expect(row).toContainText("Ayesha Malik")
@@ -120,7 +120,7 @@ test("pharmacy displays prescription patient and doctor and invoices a FEFO disp
   await expect(row).toContainText("Dr. Ahmed Khan")
   await row.getByRole("button", { name: "Dispense" }).click()
   await page.getByLabel("Quantity for E2E Pharmacy Medicine 10 mg").fill("3")
-  await page.getByRole("button", { name: "Dispense and create invoice" }).click()
+  await page.getByRole("button", { name: "Dispense & Create Invoice", exact: true }).click()
   await expect(page.getByText("Invoice PH-2026-000001 created.", { exact: true })).toBeVisible()
   expect(postedItems).toEqual([{ prescriptionItemId, quantity: 3 }])
   await expect(page.getByRole("row").filter({ hasText: "E2E Pharmacy Medicine 10 mg" })).toContainText("DISPENSED")

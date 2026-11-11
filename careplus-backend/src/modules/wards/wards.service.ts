@@ -1,12 +1,20 @@
+import { sseService } from "@modules/realtime/sse.service";
 import { BedStatus, Prisma, WardType } from "@prisma/client";
 import { Request } from "express";
 import { prisma } from "@config/prisma";
-import { ConflictError, ForbiddenError, NotFoundError } from "@common/errors/AppError";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "@common/errors/AppError";
 import { writeAuditLog } from "@common/utils/auditLog";
 import { AccessTokenPayload } from "@common/middleware/authenticate";
 import { PageParams } from "@common/utils/pagination";
 import { getActorDoctorId, assertDoctorOwns, assertDoctorCanAdmitPatient } from "@common/utils/recordAuthorization";
 import { assertBedStatusTransitionAllowed } from "./bedStatusTransitions";
+import {
+  createIpdInvoiceInTransaction,
+  ensureBedRentLines,
+  ensureBedRentLinesInTransaction,
+  getBedRentCutoffTimeInTransaction,
+  ipdBillingService,
+} from "@modules/ipd/ipdBilling.service";
 
 export const wardsService = {
   async listWards(includeInactive = false) {
@@ -162,13 +170,13 @@ export const wardsService = {
       ...(actorDoctorId ? { attendingDoctorId: actorDoctorId } : {}),
     };
     const [items, total] = await Promise.all([
-      prisma.admission.findMany({ where, skip: params.skip, take: params.limit, include: { patient: { include: { invoices: { where: { status: { not: "VOID" } }, select: { balanceAmount: true } }, ledgerEntries: { select: { amount: true } } } }, attendingDoctor: { include: { user: { select: { id: true, name: true } } } }, bed: { include: { room: { include: { ward: true } } } } }, orderBy: { admissionDate: "desc" } }),
+      prisma.admission.findMany({ where, skip: params.skip, take: params.limit, include: { patient: { include: { invoices: { where: { status: { not: "VOID" } }, select: { balanceAmount: true } }, ledgerEntries: { select: { amount: true, invoiceId: true } } } }, attendingDoctor: { include: { user: { select: { id: true, name: true } } } }, bed: { include: { room: { include: { ward: true } } } } }, orderBy: { admissionDate: "desc" } }),
       prisma.admission.count({ where }),
     ]);
     return {
       items: items.map((admission) => {
         const outstandingBalance = admission.patient.invoices.reduce((sum, invoice) => sum + Number(invoice.balanceAmount), 0) -
-          admission.patient.ledgerEntries.reduce((sum, entry) => sum + Number(entry.amount), 0);
+          admission.patient.ledgerEntries.filter((entry) => !entry.invoiceId).reduce((sum, entry) => sum + Number(entry.amount), 0);
         const { invoices: _invoices, ledgerEntries: _ledgerEntries, ...patient } = admission.patient;
         return { ...admission, patient, outstandingBalance };
       }),
@@ -180,7 +188,7 @@ export const wardsService = {
     const admission = await prisma.admission.findUnique({
       where: { id },
       include: {
-        patient: { include: { invoices: { where: { status: { not: "VOID" } }, select: { balanceAmount: true } }, ledgerEntries: { select: { amount: true } } } },
+        patient: { include: { invoices: { where: { status: { not: "VOID" } }, select: { balanceAmount: true } }, ledgerEntries: { select: { amount: true, invoiceId: true } } } },
         bed: { include: { room: { include: { ward: true } } } },
         attendingDoctor: { include: { user: { select: { id: true, name: true } } } },
         transfers: true,
@@ -191,9 +199,35 @@ export const wardsService = {
     if (!admission) throw new NotFoundError("Admission not found");
     await assertDoctorOwns(actor, admission.attendingDoctorId);
     const outstandingBalance = admission.patient.invoices.reduce((sum, invoice) => sum + Number(invoice.balanceAmount), 0) -
-      admission.patient.ledgerEntries.reduce((sum, entry) => sum + Number(entry.amount), 0);
+      admission.patient.ledgerEntries.filter((entry) => !entry.invoiceId).reduce((sum, entry) => sum + Number(entry.amount), 0);
     const { invoices: _invoices, ledgerEntries: _ledgerEntries, ...patient } = admission.patient;
     return { ...admission, patient, outstandingBalance };
+  },
+
+  async getAdmissionSlip(actor: AccessTokenPayload, id: string) {
+    const admission = await prisma.admission.findUnique({
+      where: { id },
+      include: {
+        patient: true,
+        bed: { include: { room: { include: { ward: true } } } },
+        attendingDoctor: {
+          select: {
+            id: true,
+            specialization: true,
+            qualification: true,
+            user: { select: { id: true, name: true, staffProfile: { select: { signatureUrl: true, stampUrl: true } } } },
+          },
+        },
+      },
+    });
+    if (!admission) throw new NotFoundError("Admission not found");
+    if (actor.role === "DOCTOR") {
+      const doctorId = await getActorDoctorId(actor);
+      if (admission.attendingDoctorId !== doctorId) {
+        await assertDoctorOwns(actor, admission.attendingDoctorId);
+      }
+    }
+    return admission;
   },
 
   async getDischargePrintData(actor: AccessTokenPayload, id: string) {
@@ -230,12 +264,12 @@ export const wardsService = {
         take: 10,
       }),
       prisma.ultrasoundOrder.findMany({
-        where: { patientId: admission.patientId, status: "COMPLETED" },
+        where: { patientId: admission.patientId, status: { in: ["REPORTED", "VERIFIED", "DELIVERED"] } },
         orderBy: { completedAt: "desc" },
         take: 10,
       }),
       prisma.invoice.findMany({ where: { patientId: admission.patientId, status: { not: "VOID" } }, select: { balanceAmount: true } }),
-      prisma.patientLedgerEntry.aggregate({ where: { patientId: admission.patientId }, _sum: { amount: true } }),
+      prisma.patientLedgerEntry.aggregate({ where: { patientId: admission.patientId, invoiceId: null }, _sum: { amount: true } }),
     ]);
     return {
       admission,
@@ -250,9 +284,12 @@ export const wardsService = {
   },
 
   /** Admits a patient: bed must be AVAILABLE. Sets bed to OCCUPIED atomically. */
-  async admit(actor: AccessTokenPayload, input: { patientId: string; bedId: string; attendingDoctorId: string; admissionType: string; admissionReason: string; depositAmount?: number; dailyRate?: number; expectedStayDays?: number; admissionNotes?: string }, req?: Request) {
+  async admit(actor: AccessTokenPayload, input: { patientId: string; bedId: string; attendingDoctorId: string; admissionType: string; admissionReason: string; depositAmount?: number; dailyRate?: number; expectedStayDays?: number; admissionNotes?: string; bedRentCutoffTime?: string }, req?: Request) {
     if (input.dailyRate !== undefined && actor.role !== "ADMIN" && actor.role !== "DOCTOR") {
       throw new ForbiddenError("Only administrators can override an admission daily rate");
+    }
+    if (input.bedRentCutoffTime !== undefined && actor.role !== "ADMIN") {
+      throw new ForbiddenError("Only administrators can override the bed-rent cut-off for an admission");
     }
     const depositAmount = actor.role === "DOCTOR" ? 0 : input.depositAmount ?? 0;
     const dailyRate = actor.role === "DOCTOR" ? undefined : input.dailyRate;
@@ -273,6 +310,7 @@ export const wardsService = {
         data: { status: "OCCUPIED" },
       });
       if (claimedBed.count !== 1) throw new ConflictError(`Bed ${bed.bedNumber} is no longer available`);
+      const cutoffValue = await getBedRentCutoffTimeInTransaction(tx, input.bedRentCutoffTime);
       const created = await tx.admission.create({
         data: {
           patientId: input.patientId,
@@ -284,10 +322,32 @@ export const wardsService = {
           depositAmount,
           depositStatus: depositAmount > 0 ? "PAID" : "PENDING",
           dailyRate: dailyRate ?? bed.dailyRate,
+          bedRentCutoffTime: cutoffValue,
           createdBy: actor.sub,
         },
       });
+      await tx.bedRateHistory.create({
+        data: { bedId: bed.id, dailyRate: dailyRate ?? bed.dailyRate, effectiveAt: created.admissionDate, createdBy: actor.sub },
+      });
+      const invoice = await createIpdInvoiceInTransaction(tx, created);
+      await writeAuditLog({ userId: actor.sub, action: "CREATE", module: "billing", entityType: "Invoice", entityId: invoice.id, newValues: invoice, req }, tx);
+      await ensureBedRentLinesInTransaction(tx, created.id, created.admissionDate);
       if (depositAmount > 0) {
+        const payment = await tx.payment.create({
+          data: {
+            invoiceId: invoice.id,
+            amount: depositAmount,
+            paymentMethod: "CASH",
+            purpose: "DEPOSIT",
+            notes: "Advance deposit",
+            createdBy: actor.sub,
+          },
+        });
+        await tx.invoice.update({
+          where: { id: invoice.id },
+          data: { paidAmount: depositAmount, balanceAmount: 0, status: "PAID" },
+        });
+        await writeAuditLog({ userId: actor.sub, action: "CREATE", module: "billing", entityType: "Payment", entityId: payment.id, newValues: payment, req }, tx);
         await tx.patientLedgerEntry.create({
           data: {
             patientId: input.patientId,
@@ -297,6 +357,8 @@ export const wardsService = {
             paymentMethod: "CASH",
             notes: "Advance deposit",
             createdBy: actor.sub,
+            invoiceId: invoice.id,
+            paymentId: payment.id,
           },
         });
       }
@@ -319,35 +381,13 @@ export const wardsService = {
     });
     if (!admission) throw new NotFoundError("Admission not found");
     if (admission.status !== "ACTIVE") throw new ConflictError("A deposit can only be recorded for an active admission");
-    const updated = await prisma.$transaction(async (tx) => {
-      const result = await tx.admission.update({
-        where: { id: admissionId },
-        data: { depositAmount: { increment: input.amount }, depositStatus: "PAID" },
-      });
-      await tx.patientLedgerEntry.create({
-        data: {
-          patientId: admission.patientId,
-          admissionId,
-          type: "ADVANCE_DEPOSIT",
-          amount: input.amount,
-          paymentMethod: input.paymentMethod as never,
-          notes: input.notes?.trim() || "Advance deposit",
-          createdBy: actor.sub,
-        },
-      });
-      await writeAuditLog({
-        userId: actor.sub,
-        action: "UPDATE",
-        module: "wards",
-        entityType: "Admission",
-        entityId: admissionId,
-        oldValues: { depositAmount: admission.depositAmount, depositStatus: admission.depositStatus },
-        newValues: { depositAmount: result.depositAmount, depositStatus: result.depositStatus, paymentAmount: input.amount, paymentMethod: input.paymentMethod },
-        req,
-      }, tx);
-      return result;
-    });
-    return updated;
+    await ipdBillingService.recordPayment(actor, admissionId, {
+      amount: input.amount,
+      paymentMethod: input.paymentMethod as "CASH" | "CARD" | "BANK_TRANSFER" | "MOBILE_WALLET" | "ONLINE" | "CREDIT",
+      purpose: "DEPOSIT",
+      notes: input.notes,
+    }, req);
+    return prisma.admission.findUniqueOrThrow({ where: { id: admissionId } });
   },
 
   /** Transfers a patient to a new bed: old bed -> AVAILABLE, new bed -> OCCUPIED, logged in bed_transfers. */
@@ -362,13 +402,19 @@ export const wardsService = {
     if (toBed.status !== "AVAILABLE") throw new ConflictError(`Destination bed is not available (status: ${toBed.status})`);
 
     const updated = await prisma.$transaction(async (tx) => {
+      const transferDate = new Date();
+      await ensureBedRentLinesInTransaction(tx, admissionId, transferDate);
       await tx.bed.update({ where: { id: admission.bedId }, data: { status: "AVAILABLE" } });
       await tx.bed.update({ where: { id: toBedId }, data: { status: "OCCUPIED" } });
       const transfer = await tx.bedTransfer.create({
-        data: { admissionId, fromBedId: admission.bedId, toBedId, reason, createdBy: actor.sub },
+        data: { admissionId, fromBedId: admission.bedId, toBedId, reason, createdBy: actor.sub, transferDate },
       });
       const adm = await tx.admission.update({ where: { id: admissionId }, data: { bedId: toBedId, dailyRate: toBed.dailyRate } });
+      await tx.bedRateHistory.create({
+        data: { bedId: toBed.id, dailyRate: toBed.dailyRate, effectiveAt: transferDate, createdBy: actor.sub },
+      });
       await writeAuditLog({ userId: actor.sub, action: "TRANSFER", module: "wards", entityType: "Admission", entityId: admissionId, newValues: transfer, req }, tx);
+      sseService.broadcast({ type: "ward:admission_updated", targetRoles: ["ADMIN", "NURSE", "DOCTOR", "RECEPTIONIST"], payload: { admissionId } });
       return adm;
     });
 
@@ -385,20 +431,39 @@ export const wardsService = {
     referral: string;
     instructions: string;
     confirmUnpaidBalance: boolean;
+    overrideReason?: string;
   }, req?: Request) {
+    const dischargeDate = new Date();
     const admission = await prisma.admission.findUnique({
       where: { id: admissionId },
-      include: { patient: { include: { invoices: { where: { status: { not: "VOID" } }, select: { balanceAmount: true } }, ledgerEntries: { select: { amount: true } } } } },
     });
     if (!admission) throw new NotFoundError("Admission not found");
     await assertDoctorOwns(actor, admission.attendingDoctorId);
     if (admission.status !== "ACTIVE") throw new ConflictError("Admission is not active");
-    const outstandingBalance = admission.patient.invoices.reduce((total, invoice) => total + Number(invoice.balanceAmount), 0) -
-      admission.patient.ledgerEntries.reduce((total, entry) => total + Number(entry.amount), 0);
-    if (outstandingBalance > 0 && !input.confirmUnpaidBalance) {
-      throw new ConflictError("An unpaid balance remains. Confirm discharge with the balance pending.");
+    let ipdInvoice = await prisma.invoice.findUnique({ where: { admissionId }, select: { id: true, balanceAmount: true } });
+    if (ipdInvoice) {
+      await ensureBedRentLines(admissionId, dischargeDate);
     }
-    const dischargeDate = new Date();
+    const unpaidInvoices = await prisma.invoice.findMany({
+      where: {
+        patientId: admission.patientId,
+        status: { not: "VOID" },
+        balanceAmount: { gt: 0 },
+      },
+      select: { id: true, balanceAmount: true, department: true },
+    });
+    const outstandingBalance = unpaidInvoices.reduce((sum, inv) => sum + Number(inv.balanceAmount), 0);
+    if (outstandingBalance > 0) {
+      if (actor.role !== "ADMIN") {
+        throw new ForbiddenError("Only an administrator can override discharge when unpaid dues remain.");
+      }
+      if (!input.confirmUnpaidBalance) {
+        throw new ConflictError("An unpaid balance remains. Confirm discharge with the balance pending.");
+      }
+      if (!input.overrideReason || input.overrideReason.trim().length === 0) {
+        throw new BadRequestError("An explicit override reason is mandatory to discharge a patient with unpaid dues.");
+      }
+    }
     const completedSurgeries = await prisma.surgery.findMany({
       where: { patientId: admission.patientId, status: "COMPLETED" },
       orderBy: { actualEndAt: "desc" },
@@ -416,6 +481,7 @@ export const wardsService = {
     };
 
     const updated = await prisma.$transaction(async (tx) => {
+      if (ipdInvoice) await ensureBedRentLinesInTransaction(tx, admissionId, dischargeDate);
       await tx.bed.update({ where: { id: admission.bedId }, data: { status: "CLEANING" } });
       const adm = await tx.admission.update({
         where: { id: admissionId },
@@ -427,7 +493,24 @@ export const wardsService = {
           dischargeDetails,
         },
       });
-      await writeAuditLog({ userId: actor.sub, action: "DISCHARGE", module: "wards", entityType: "Admission", entityId: admissionId, newValues: adm, req }, tx);
+      const invoice = await tx.invoice.findUnique({ where: { admissionId } });
+      if (invoice) await tx.invoice.update({ where: { id: invoice.id }, data: { status: "FINALIZED" } });
+      await writeAuditLog({
+        userId: actor.sub,
+        action: "DISCHARGE",
+        module: "wards",
+        entityType: "Admission",
+        entityId: admissionId,
+        reason: input.overrideReason ? `OVERRIDE_UNPAID_DUES: ${input.overrideReason.trim()}` : undefined,
+        oldValues: { status: admission.status, outstandingBalance },
+        newValues: {
+          ...adm,
+          outstandingBalance,
+          overrideReason: input.overrideReason?.trim() || null,
+          overriddenBy: outstandingBalance > 0 ? actor.sub : null,
+        },
+        req,
+      }, tx);
       return adm;
     });
 

@@ -45,6 +45,7 @@ describe("Integration: consultation vitals persistence and criticality", () => {
         timeSlot: new Date("1970-01-01T10:00:00.000Z"),
         tokenNumber: Number(Date.now().toString().slice(-8)),
         appointmentType: "CONSULTATION",
+        gender: patient.gender,
         status: "IN_CONSULTATION",
         source: "WALK_IN",
         createdBy: user.id,
@@ -112,12 +113,15 @@ describe("Integration: consultation vitals persistence and criticality", () => {
 
     const unconfirmed = await request(app).patch(`/api/v1/consultations/${consultationId}`).set(headers).send({
       vitals: { oxygen_saturation: 66, critical_confirmed: false, isCritical: false },
+      expectedUpdatedAt: blank.body.data.updatedAt,
     });
     expect(unconfirmed.status).toBe(422);
     expect(unconfirmed.body.message).toContain("Confirm critical vital values");
 
+    const currentConsultation = await prisma.consultation.findUniqueOrThrow({ where: { id: consultationId } });
     const confirmed = await request(app).patch(`/api/v1/consultations/${consultationId}`).set(headers).send({
       vitals: { oxygen_saturation: 66, critical_confirmed: true, isCritical: false },
+      expectedUpdatedAt: currentConsultation.updatedAt.toISOString(),
     });
     expect(confirmed.status).toBe(200);
     expect(confirmed.body.data.oxygenSaturation).toBe(66);
@@ -132,6 +136,7 @@ describe("Integration: consultation vitals persistence and criticality", () => {
         timeSlot: new Date("1970-01-01T11:00:00.000Z"),
         tokenNumber: appointment.tokenNumber + 1,
         appointmentType: "CONSULTATION",
+        gender: patient.gender,
         status: "IN_CONSULTATION",
         source: "WALK_IN",
         createdBy: user.id,

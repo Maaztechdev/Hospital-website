@@ -81,7 +81,7 @@ async function openAdmissionModal(page: Page, session: Session, patient: Patient
   }
 
   await dialog.getByRole("button", { name: "Admit Patient" }).click()
-  await expect(dialog.getByText("Admission Summary", { exact: true })).toBeVisible()
+  await expect(dialog.getByText("Admission Complete", { exact: true })).toBeVisible()
   return dialog
 }
 
@@ -122,7 +122,7 @@ test("doctor admits in two steps without financial fields; receptionist admits w
     patientFixtures.push(receptionistPatient)
     const receptionistReason = `Reception three-step E2E ${suffix}`
     const receptionistDialog = await openAdmissionModal(page, receptionistSession, receptionistPatient, beds[1].id, "Planned", receptionistReason, true, "10000")
-    await expect(receptionistDialog.getByText("Deposit", { exact: true })).toBeVisible()
+    await expect(receptionistDialog.getByText("Advance Deposit", { exact: true })).toBeVisible()
     await receptionistDialog.getByRole("button", { name: "Done" }).click()
     await expect(page.locator(`button[data-bed-id="${beds[1].id}"]`)).not.toContainText("Deposit pending")
 
@@ -142,7 +142,7 @@ test("doctor admits in two steps without financial fields; receptionist admits w
         for (const admission of admissions.filter((item) => item.status === "ACTIVE")) {
           const discharged = await request.post(`${apiBase}/wards/admissions/${admission.id}/discharge`, {
             headers: adminHeaders,
-            data: { diagnosis: "E2E cleanup", conditionAtDischarge: "Stable", instructions: "Test cleanup", confirmUnpaidBalance: true },
+            data: { diagnosis: "E2E cleanup", conditionAtDischarge: "Stable", instructions: "Test cleanup", confirmUnpaidBalance: true, overrideReason: "E2E automated test cleanup override" },
           })
           expect(discharged.ok(), await discharged.text()).toBeTruthy()
           const available = await request.patch(`${apiBase}/wards/beds/${admission.bedId}/status`, { headers: adminHeaders, data: { status: "AVAILABLE" } })

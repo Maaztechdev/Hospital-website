@@ -33,6 +33,7 @@ import {
   labSettingsAssetParamSchema,
   labReportsQuerySchema,
   labBillingSettingsSchema,
+  verifyLabOrderBodySchema,
   labPackageSchema,
   listLabPackagesQuerySchema,
   listLabTestsQuerySchema,
@@ -197,7 +198,7 @@ export const labController = {
   }),
   verify: asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
-    const order = await labService.verify(req.user, req.params.id, req);
+    const order = await labService.verify(req.user, req.params.id, req, req.body?.expectedUpdatedAt);
     sendSuccess(res, 200, { data: order, message: "Result verified" });
   }),
   uploadReport: asyncHandler(async (req: Request, res: Response) => {
@@ -273,6 +274,11 @@ export const labController = {
   listReferenceLabs: asyncHandler(async (_req: Request, res: Response) => {
     sendSuccess(res, 200, { data: await labLedgerService.listReferenceLabs() });
   }),
+  generateOrderInvoice: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const invoice = await labService.generateOrderInvoice(req.user, req.params.id, req.body, req);
+    sendSuccess(res, 201, { data: invoice, message: "Lab invoice generated" });
+  }),
 };
 
 const router = Router();
@@ -320,6 +326,7 @@ router.get("/orders", requireRole(["ADMIN", "DOCTOR", "RECEPTIONIST", "LAB_TECHN
 router.get("/orders/:id", requireRole(["ADMIN", "DOCTOR", "RECEPTIONIST", "LAB_TECHNICIAN", "PATHOLOGIST", "NURSE"]), validate({ params: idParamSchema }), labController.getById);
 router.post("/orders", requireRole(["ADMIN", "DOCTOR", "RECEPTIONIST"]), validate({ body: createLabOrderSchema }), labController.createOrder);
 router.post("/orders/packages", requireRole(["ADMIN", "DOCTOR", "RECEPTIONIST"]), validate({ body: createLabPackageOrderSchema }), labController.createPackageOrder);
+router.post("/orders/:id/invoice", requireRole(["ADMIN", "BILLING_MANAGER", "RECEPTIONIST", "LAB_TECHNICIAN", "PATHOLOGIST"]), validate({ params: idParamSchema }), labController.generateOrderInvoice);
 router.patch(
   "/orders/:id/sample-status",
   requireRole(["ADMIN", "LAB_TECHNICIAN"]),
@@ -356,7 +363,7 @@ router.post(
   validate({ params: idParamSchema, body: amendResultSchema }),
   labController.amendResult
 );
-router.post("/orders/:id/verify", requireRole(["ADMIN", "PATHOLOGIST"]), validate({ params: idParamSchema }), labController.verify);
+router.post("/orders/:id/verify", requireRole(["ADMIN", "PATHOLOGIST"]), validate({ params: idParamSchema, body: verifyLabOrderBodySchema }), labController.verify);
 router.post(
   "/orders/:id/attachments",
   requireRole(["ADMIN", "LAB_TECHNICIAN", "PATHOLOGIST"]),

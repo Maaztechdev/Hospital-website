@@ -8,6 +8,7 @@ import { useDashboard } from "@/dashboard/store/useDashboard"
 import { ROLE_LABELS, type Role } from "@/dashboard/types"
 import { ROLE_ROUTES } from "@/dashboard/nav"
 import { Button } from "@/components/ui/button"
+import { can, type PermissionModule, type PermissionAction } from "@/dashboard/permissions"
 
 const LABELS: Record<string, string> = {
   dashboard: "Dashboard",
@@ -50,9 +51,9 @@ export function Breadcrumbs() {
           <span key={acc} className="flex items-center gap-1">
             {i > 0 && <ChevronRight className="h-3 w-3 text-[var(--cp-ink-faint)]" />}
             {isLast ? (
-              <span className="font-medium text-[var(--cp-ink)]">{label}</span>
+              <span className="inline-flex min-h-[36px] items-center px-1.5 py-1 font-medium text-[var(--cp-ink)]">{label}</span>
             ) : (
-              <Link to={acc} className="hover:text-[var(--cp-primary)]">{label}</Link>
+              <Link to={acc} className="inline-flex min-h-[36px] items-center px-1.5 py-1 hover:text-[var(--cp-primary)]">{label}</Link>
             )}
           </span>
         )
@@ -102,9 +103,26 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   )
 }
 
-export function RoleGuard({ allow, children }: { allow: Role[]; children: React.ReactNode }) {
+export function RoleGuard({
+  allow,
+  module,
+  action = "view",
+  children,
+}: {
+  allow: Role[];
+  module?: PermissionModule;
+  action?: PermissionAction;
+  children: React.ReactNode;
+}) {
   const { currentUser } = useDashboard()
   if (!currentUser) return null
+  if (currentUser.role === "admin") return <>{children}</>
+
+  if (module) {
+    if (!can(currentUser.role, module, action)) return <NotPermitted />
+    return <>{children}</>
+  }
+
   if (!allow.includes(currentUser.role)) return <NotPermitted />
   return <>{children}</>
 }

@@ -14,11 +14,25 @@ export default defineConfig({
     },
   },
   server: {
+    proxy: {
+      '/api/v1': {
+        target: 'http://127.0.0.1:4100',
+        changeOrigin: true,
+      },
+    },
     fs: {
       allow: [
         __dirname,
         path.resolve(__dirname, '../careplus-backend/src/common/validation'),
       ],
+    },
+  },
+  preview: {
+    proxy: {
+      '/api/v1': {
+        target: 'http://127.0.0.1:4100',
+        changeOrigin: true,
+      },
     },
   },
 })

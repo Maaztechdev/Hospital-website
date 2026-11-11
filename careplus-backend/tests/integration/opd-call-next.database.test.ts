@@ -34,7 +34,7 @@ describe("OPD call-next and consultation record access", () => {
     const adminActor = { sub: admin.id, role: "ADMIN" as const, email: admin.email };
     const doctorActor = { sub: doctorUser.id, role: "DOCTOR" as const, email: doctorUser.email };
     const otherDoctorActor = { sub: otherDoctorUser.id, role: "DOCTOR" as const, email: otherDoctorUser.email };
-    const initialStatuses = ["CONFIRMED", "WAITING", "CONFIRMED"] as const;
+    const initialStatuses = ["CONFIRMED", "CONFIRMED", "CONFIRMED"] as const;
 
     try {
       for (const [index, status] of initialStatuses.entries()) {
@@ -43,9 +43,10 @@ describe("OPD call-next and consultation record access", () => {
             patientId: patientRecords[index].id,
             doctorId: doctor.id,
             appointmentDate: dateValue,
-            timeSlot: new Date("1970-01-01T10:00:00.000Z"),
+            timeSlot: new Date(Date.UTC(1970, 0, 1, 10 + index, 0)),
             tokenNumber: index + 1,
             appointmentType: "CONSULTATION",
+            gender: patientRecords[index].gender,
             status,
             priority: index === 2 ? "EMERGENCY" : "ROUTINE",
             source: "WALK_IN",
@@ -67,17 +68,22 @@ describe("OPD call-next and consultation record access", () => {
       expect(rejected).toHaveLength(1);
       if (succeeded[0].status !== "fulfilled") throw new Error("Expected one call-next request to succeed");
       expect(succeeded[0].value?.tokenNumber).toBe(1);
-      expect(succeeded[0].value?.status).toBe("IN_CONSULTATION");
+      expect(succeeded[0].value?.priority).toBe("ROUTINE");
+      expect(succeeded[0].value?.status).toBe("WAITING");
       if (rejected[0].status !== "rejected") throw new Error("Expected the concurrent request to be rejected");
       expect(rejected[0].reason.message).toMatch(/Resume the current consultation/);
 
       await prisma.appointment.update({ where: { id: succeeded[0].value!.id }, data: { status: "COMPLETED" } });
       const next = await appointmentsService.callNext(doctorActor, doctor.id);
       expect(next?.tokenNumber).toBe(2);
-      expect(next?.status).toBe("IN_CONSULTATION");
+      expect(next?.status).toBe("WAITING");
 
       await prisma.appointment.update({ where: { id: next!.id }, data: { status: "COMPLETED" } });
-      await prisma.appointment.update({ where: { id: appointmentIds[2] }, data: { status: "COMPLETED" } });
+      const last = await appointmentsService.callNext(doctorActor, doctor.id);
+      expect(last?.tokenNumber).toBe(3);
+      expect(last?.status).toBe("WAITING");
+
+      await prisma.appointment.update({ where: { id: last!.id }, data: { status: "COMPLETED" } });
       expect(await appointmentsService.callNext(doctorActor, doctor.id)).toBeNull();
 
       const consultation = await prisma.consultation.create({

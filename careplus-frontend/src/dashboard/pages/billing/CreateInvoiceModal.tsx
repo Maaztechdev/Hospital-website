@@ -10,18 +10,44 @@ import { useDashboard } from "@/dashboard/store/DashboardContext"
 import type { InvoiceLineItem, Patient } from "@/dashboard/types"
 import { PatientSearchSelect } from "@/dashboard/components/PatientSearchSelect"
 import { formatCurrency, generateId } from "@/dashboard/lib/format"
-import { api, toInvoice } from "@/lib/api"
+import { api, toInvoice, type ApiInvoiceDepartment } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 
 type DiscountType = "FLAT" | "PERCENTAGE"
 type InvoiceDraftItem = InvoiceLineItem & { discountType: DiscountType }
 
-export function CreateInvoiceModal({ open, onClose, prefillMR }: { open: boolean; onClose: () => void; prefillMR?: string }) {
+export function CreateInvoiceModal({
+  open,
+  onClose,
+  prefillMR,
+  prefillDescription,
+  prefillPrice,
+  prefillCategory,
+  appointmentId,
+  department = "RECEPTION",
+}: {
+  open: boolean
+  onClose: () => void
+  prefillMR?: string
+  prefillDescription?: string
+  prefillPrice?: number
+  prefillCategory?: "Consultation" | "Lab" | "Medicine" | "Ward" | "OT" | "Other"
+  appointmentId?: string
+  department?: ApiInvoiceDepartment
+}) {
   const { patients, dispatch } = useDashboard()
   const { toast } = useToast()
   const navigate = useNavigate()
   const [patient, setPatient] = React.useState<Patient | null>(null)
-  const [items, setItems] = React.useState<InvoiceDraftItem[]>([{ id: generateId("li"), category: "Consultation", description: "", qty: 1, unitPrice: 0, discount: 0, discountType: "FLAT" }])
+  const [items, setItems] = React.useState<InvoiceDraftItem[]>([{
+    id: generateId("li"),
+    category: prefillCategory ?? "Consultation",
+    description: prefillDescription ?? "",
+    qty: 1,
+    unitPrice: prefillPrice ?? 0,
+    discount: 0,
+    discountType: "FLAT",
+  }])
   const [activeWardRate, setActiveWardRate] = React.useState<number | null>(null)
   const [saving, setSaving] = React.useState(false)
   const savingRef = React.useRef(false)
@@ -62,12 +88,20 @@ export function CreateInvoiceModal({ open, onClose, prefillMR }: { open: boolean
 
   React.useEffect(() => {
     if (!open) { initializedForRef.current = null; return }
-    const prefillKey = prefillMR ?? ""
+    const prefillKey = `${prefillMR ?? ""}:${prefillDescription ?? ""}:${prefillPrice ?? ""}`
     if (initializedForRef.current === prefillKey) return
     initializedForRef.current = prefillKey
     setPatient(patients.find((candidate) => candidate.mrNumber === prefillMR) ?? null)
-    setItems([{ id: generateId("li"), category: "Consultation", description: "", qty: 1, unitPrice: 0, discount: 0, discountType: "FLAT" }])
-  }, [open, prefillMR, patients])
+    setItems([{
+      id: generateId("li"),
+      category: prefillCategory ?? "Consultation",
+      description: prefillDescription ?? (prefillMR ? "Doctor Consultation Fee" : ""),
+      qty: 1,
+      unitPrice: prefillPrice ?? 0,
+      discount: 0,
+      discountType: "FLAT",
+    }])
+  }, [open, prefillMR, prefillDescription, prefillPrice, prefillCategory, patients])
 
   React.useEffect(() => {
     if (!patient?.id) { setActiveWardRate(null); return }
@@ -107,7 +141,7 @@ export function CreateInvoiceModal({ open, onClose, prefillMR }: { open: boolean
     savingRef.current = true
     setSaving(true)
     try {
-      const created = await api.createInvoice({ patientId: patient.id, items: items.map((item) => ({ itemType: item.category.toUpperCase() as "CONSULTATION" | "LAB" | "MEDICINE" | "WARD" | "OT" | "OTHER", description: item.description.trim(), quantity: item.qty, unitPrice: item.unitPrice, discount: item.discount, discountType: item.discountType })) })
+      const created = await api.createInvoice({ department, patientId: patient.id, appointmentId, items: items.map((item) => ({ itemType: item.category.toUpperCase() as "CONSULTATION" | "LAB" | "MEDICINE" | "WARD" | "OT" | "OTHER", description: item.description.trim(), quantity: item.qty, unitPrice: item.unitPrice, discount: item.discount, discountType: item.discountType })) })
       const fresh = await api.getInvoice(created.id)
       dispatch({ type: "UPSERT_INVOICE", invoice: toInvoice(fresh, patient) })
       toast({ title: "Invoice created", description: `${fresh.invoiceNumber} raised for ${patient.name}.`, variant: "success" })

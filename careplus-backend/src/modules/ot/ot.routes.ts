@@ -11,6 +11,9 @@ import { validate } from "@common/middleware/validate";
 import { asyncHandler } from "@common/utils/asyncHandler";
 import { sendSuccess } from "@common/utils/apiResponse";
 import { assertDoctorOwns, assertPatientAccess, getActorDoctorId } from "@common/utils/recordAuthorization";
+import { addIpdChargeInTransaction, reverseIpdLineInTransaction } from "@modules/ipd/ipdBilling.service";
+import { roundMoney } from "@common/utils/money";
+import { logger } from "@config/logger";
 import { HOSPITAL_TIME_ZONE, isFutureSurgeryStart, PAST_SURGERY_START_MESSAGE } from "./ot.time";
 
 // ── Validators ──────────────────────────────────────────────
@@ -27,6 +30,7 @@ const scheduleSurgerySchema = z.object({
   scheduledStart: z.string().datetime({ offset: true }),
   scheduledEnd: z.string().datetime({ offset: true }),
   notes: z.string().max(2000).optional(),
+  admissionId: z.string().uuid().optional(),
   preOpChecklist: z.object({
     consentSigned: z.boolean(),
     npoConfirmed: z.boolean(),
@@ -42,6 +46,7 @@ const availabilityQuerySchema = scheduleSurgerySchema.pick({
   scheduledStart: true,
   scheduledEnd: true,
   priority: true,
+  admissionId: true,
 });
 
 const checklistSchema = z.object({
@@ -57,6 +62,7 @@ const checklistSchema = z.object({
 const completeSurgerySchema = z.object({
   postOpNotes: z.string().trim().min(1, "Post-op notes are required"),
   complications: z.string().optional(),
+  chargeAmount: z.number().min(0).optional(),
 });
 const startSurgerySchema = z.object({ emergencyOverrideReason: z.string().trim().min(1).max(2000).optional() });
 const recoverySurgerySchema = z.object({
@@ -125,13 +131,19 @@ async function recordSurgeryTransition(
   data: Prisma.SurgeryUpdateInput,
   req?: Request,
   reason?: string,
-  guard?: (tx: Prisma.TransactionClient) => Promise<void>,
+  guard?: (tx: Prisma.TransactionClient) => Promise<string | void>,
 ) {
   const user = await prisma.user.findUnique({ where: { id: actor.sub }, select: { name: true } });
   if (!user) throw new UnauthorizedError();
   try {
     return await prisma.$transaction(async (tx) => {
-    if (guard) await guard(tx);
+    let transitionReason = reason;
+    if (guard) {
+      const guardReason = await guard(tx);
+      if (typeof guardReason === "string" && guardReason.trim()) {
+        transitionReason = transitionReason ? `${transitionReason}. ${guardReason}` : guardReason;
+      }
+    }
     const changed = await tx.surgery.updateMany({ where: { id: surgery.id, status: surgery.status }, data });
     if (changed.count !== 1) throw new ConflictError("Surgery status changed; refresh and try again");
     const record = await tx.surgery.findUniqueOrThrow({ where: { id: surgery.id } });
@@ -142,7 +154,7 @@ async function recordSurgeryTransition(
         toStatus,
         changedBy: actor.sub,
         actorName: user.name,
-        reason: reason ?? null,
+        reason: transitionReason ?? null,
       },
     });
     await writeAuditLog({
@@ -152,7 +164,7 @@ async function recordSurgeryTransition(
       entityType: "Surgery",
       entityId: surgery.id,
       oldValues: { status: surgery.status },
-      newValues: { status: toStatus, ...(reason ? { reason } : {}) },
+      newValues: { status: toStatus, ...(transitionReason ? { reason: transitionReason } : {}) },
       req,
     }, tx);
     await notifySurgeryParticipants(surgery.id, `${surgery.id} status changed to ${toStatus.replaceAll("_", " ")}`, tx);
@@ -175,6 +187,7 @@ async function notifySurgeryParticipants(
     where: { id: surgeryId },
     select: {
       id: true,
+      status: true,
       surgeryType: true,
       surgeon: { select: { userId: true } },
       assistantSurgeon: { select: { userId: true } },
@@ -199,7 +212,12 @@ async function notifySurgeryParticipants(
     message: `${surgery.surgeryType}: ${message}`,
     relatedEntityType: "Surgery",
     relatedEntityId: surgery.id,
-  }), tx));
+    variables: {
+      surgeryType: surgery.surgeryType,
+      status: surgery.status,
+      message,
+    },
+  })));
 }
 
 function mapStatusEvents(events: Array<{
@@ -292,7 +310,7 @@ async function findScheduleConflict(input: {
   return null;
 }
 
-const otService = {
+export const otService = {
   async listRooms(includeInactive = false) {
     const rooms = await prisma.otRoom.findMany({ where: includeInactive ? {} : { isActive: true }, orderBy: { roomName: "asc" } });
     return rooms.map(serializeRoom);
@@ -346,14 +364,35 @@ const otService = {
       prisma.surgery.findMany({ where, skip: params.skip, take: params.limit, include: { patient: true, otRoom: true, surgeon: { include: { user: true } }, assistantSurgeon: { include: { user: true } }, anesthetist: { include: { user: true } }, statusEvents: { orderBy: { createdAt: "asc" } } }, orderBy: { scheduledStart: "asc" } }),
       prisma.surgery.count({ where }),
     ]);
-    return { items: items.map(serializeSurgery), total };
+    const surgeryIds = items.map((s) => s.id);
+    const otItems = surgeryIds.length
+      ? await prisma.invoiceItem.findMany({
+          where: { sourceType: "SURGERY", sourceId: { in: surgeryIds }, reversedAt: null },
+          select: { sourceId: true, subtotal: true },
+        })
+      : [];
+    const chargeMap = new Map(otItems.map((item) => [item.sourceId, Number(item.subtotal)]));
+    return {
+      items: items.map((s) => ({
+        ...serializeSurgery(s),
+        otCharge: chargeMap.get(s.id) ?? null,
+      })),
+      total,
+    };
   },
 
   async getById(actor: AccessTokenPayload, id: string) {
     const surgery = await prisma.surgery.findUnique({ where: { id }, include: { patient: true, otRoom: true, surgeon: { include: { user: true } }, assistantSurgeon: { include: { user: true } }, anesthetist: { include: { user: true } }, statusEvents: { orderBy: { createdAt: "asc" } } } });
     if (!surgery) throw new NotFoundError("Surgery not found");
     if (actor.role === "DOCTOR") await assertSurgeryActor(actor, surgery);
-    return serializeSurgery(surgery);
+    const otItem = await prisma.invoiceItem.findFirst({
+      where: { sourceType: "SURGERY", sourceId: id, reversedAt: null },
+      select: { subtotal: true },
+    });
+    return {
+      ...serializeSurgery(surgery),
+      otCharge: otItem ? Number(otItem.subtotal) : null,
+    };
   },
 
   async summary() {
@@ -399,6 +438,27 @@ const otService = {
       throw new ConflictError(messages[conflict.kind]);
     }
 
+    let admissionId: string | null = null;
+    if (input.admissionId) {
+      const admission = await prisma.admission.findUnique({ where: { id: input.admissionId } });
+      if (!admission) throw new NotFoundError("Admission not found");
+      if (admission.patientId !== input.patientId) {
+        throw new BadRequestError("Admission does not belong to this patient");
+      }
+      if (admission.status !== "ACTIVE") {
+        throw new ConflictError("Admission is not active");
+      }
+      admissionId = admission.id;
+    } else {
+      const activeAdmission = await prisma.admission.findFirst({
+        where: { patientId: input.patientId, status: "ACTIVE" },
+        orderBy: { admissionDate: "desc" },
+      });
+      if (activeAdmission) {
+        admissionId = activeAdmission.id;
+      }
+    }
+
     const surgery = await prisma.surgery.create({
       data: {
         patientId: input.patientId,
@@ -412,6 +472,7 @@ const otService = {
         scheduledStart: start,
         scheduledEnd: end,
         notes: input.notes,
+        admissionId,
         preOpChecklistJson: {
           consent_form_confirmed: input.preOpChecklist?.consentSigned ?? false,
           fasting_confirmed: input.preOpChecklist?.npoConfirmed ?? false,
@@ -478,6 +539,10 @@ const otService = {
         message: `Cannot start surgery — missing: ${incomplete.join(", ")}`,
         relatedEntityType: "Surgery",
         relatedEntityId: id,
+        variables: {
+          surgeryType: surgery.surgeryType,
+          missingItems: incomplete.join(", "),
+        },
       });
       throw new ConflictError(surgery.priority === "EMERGENCY"
         ? `Emergency override requires a written reason; checklist incomplete: ${incomplete.join(", ")}`
@@ -524,10 +589,13 @@ const otService = {
     }, req);
   },
 
-  async complete(actor: AccessTokenPayload, id: string, input: { postOpNotes?: string; complications?: string }, req?: Request) {
-    const surgery = await prisma.surgery.findUnique({ where: { id } });
+  async complete(actor: AccessTokenPayload, id: string, input: { postOpNotes?: string; complications?: string; chargeAmount?: number }, req?: Request) {
+    const surgery = await prisma.surgery.findUnique({ where: { id }, include: { otRoom: true } });
     if (!surgery) throw new NotFoundError("Surgery not found");
     await assertSurgeryActor(actor, surgery);
+    if (surgery.status === "COMPLETED") {
+      return serializeSurgery(surgery);
+    }
     if (surgery.status !== "RECOVERY") {
       throw new ConflictError(`Cannot complete surgery from status ${surgery.status}`);
     }
@@ -535,25 +603,87 @@ const otService = {
       status: "COMPLETED",
       postOpNotes: input.postOpNotes,
       complications: input.complications,
-    }, req);
+    }, req, undefined, async (tx) => {
+      if (!surgery.admissionId) return;
+
+      // Idempotency check: completing twice or retry must not double-charge
+      const existingCharge = await tx.invoiceItem.findFirst({
+        where: {
+          admissionId: surgery.admissionId,
+          sourceType: "SURGERY",
+          sourceId: surgery.id,
+          reversedAt: null,
+        },
+      });
+      if (existingCharge) return "OT charge already posted";
+
+      // Charge amount source: configurable service charge or optional amount on completion
+      let charge = await tx.serviceCharge.findFirst({
+        where: { category: { equals: "OT", mode: "insensitive" }, name: surgery.surgeryType, isActive: true },
+      });
+      if (!charge) {
+        charge = await tx.serviceCharge.findFirst({
+          where: { category: { equals: "OT", mode: "insensitive" }, isActive: true },
+          orderBy: { createdAt: "asc" },
+        });
+      }
+
+      let amount: Prisma.Decimal | null = null;
+      if (input.chargeAmount != null && input.chargeAmount > 0) {
+        amount = roundMoney(input.chargeAmount);
+      } else if (charge) {
+        amount = charge.defaultPrice;
+      }
+
+      if (!amount || amount.lte(0)) {
+        logger.debug("No OT charge configured or provided for surgery; skipping posting.");
+        return "No OT charge configured; skipped posting";
+      }
+
+      await addIpdChargeInTransaction(tx, {
+        admissionId: surgery.admissionId,
+        itemType: "OT",
+        description: `OT: ${surgery.surgeryType}`,
+        amount,
+        sourceType: "SURGERY",
+        sourceId: surgery.id,
+        sourceDepartment: "IPD",
+        serviceCategory: "SERVICES",
+        createdBy: actor.sub,
+      });
+
+      return `OT charge of ${amount} posted to admission IPD invoice`;
+    });
   },
 
   async cancel(actor: AccessTokenPayload, id: string, reason: string, req?: Request) {
     const surgery = await prisma.surgery.findUnique({ where: { id } });
     if (!surgery) throw new NotFoundError("Surgery not found");
     await assertSurgeryActor(actor, surgery);
-    if (!["SCHEDULED", "PRE_OP"].includes(surgery.status)) throw new ConflictError(`Cannot cancel surgery from status ${surgery.status}`);
+    if (surgery.status === "CANCELLED") throw new ConflictError("Surgery is already cancelled");
     return recordSurgeryTransition(actor, surgery, "CANCELLED", {
       status: "CANCELLED",
       complications: reason,
-    }, req, reason);
+    }, req, reason, async (tx) => {
+      // Reversal flow: if an OT charge was posted for this surgery, reverse it
+      const existingCharge = await tx.invoiceItem.findFirst({
+        where: {
+          sourceType: "SURGERY",
+          sourceId: surgery.id,
+          reversedAt: null,
+        },
+      });
+      if (existingCharge) {
+        await reverseIpdLineInTransaction(tx, existingCharge.id, reason, actor.sub, req);
+      }
+    });
   },
 
   async postpone(actor: AccessTokenPayload, id: string, input: z.infer<typeof postponeSurgerySchema>, req?: Request) {
     const surgery = await prisma.surgery.findUnique({ where: { id } });
     if (!surgery) throw new NotFoundError("Surgery not found");
     await assertSurgeryActor(actor, surgery);
-    if (!["SCHEDULED", "PRE_OP"].includes(surgery.status)) throw new ConflictError(`Cannot postpone surgery from status ${surgery.status}`);
+    if (!["SCHEDULED", "PRE_OP", "COMPLETED"].includes(surgery.status)) throw new ConflictError(`Cannot postpone surgery from status ${surgery.status}`);
     const { start, end } = validateScheduleWindow({
       scheduledStart: input.scheduledStart,
       scheduledEnd: input.scheduledEnd,
@@ -571,6 +701,17 @@ const otService = {
     const user = await prisma.user.findUnique({ where: { id: actor.sub }, select: { name: true } });
     if (!user) throw new UnauthorizedError();
     return prisma.$transaction(async (tx) => {
+      // Reverse posted OT charge if any
+      const existingCharge = await tx.invoiceItem.findFirst({
+        where: {
+          sourceType: "SURGERY",
+          sourceId: surgery.id,
+          reversedAt: null,
+        },
+      });
+      if (existingCharge) {
+        await reverseIpdLineInTransaction(tx, existingCharge.id, input.reason, actor.sub, req);
+      }
       const rescheduled = await tx.surgery.update({
         where: { id },
         data: { status: "SCHEDULED", scheduledStart: start, scheduledEnd: end, postponeReason: input.reason },

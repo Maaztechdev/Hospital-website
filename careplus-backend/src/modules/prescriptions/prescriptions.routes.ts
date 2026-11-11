@@ -10,7 +10,7 @@ import { resolvePrivateFile } from "@common/utils/privateFiles";
 import { requireRole } from "@common/middleware/requireRole";
 import { validate } from "@common/middleware/validate";
 import { prescriptionsService } from "./prescriptions.service";
-import { createPrescriptionSchema, idParamSchema, listPrescriptionsQuerySchema, prescriptionTemplateSchema, voidPrescriptionSchema } from "./prescriptions.validators";
+import { createPrescriptionSchema, idParamSchema, listPrescriptionsQuerySchema, prescriptionTemplateSchema, updatePrescriptionSchema, voidPrescriptionSchema } from "./prescriptions.validators";
 
 export const prescriptionsController = {
   list: asyncHandler(async (req: Request, res: Response) => {
@@ -30,9 +30,14 @@ export const prescriptionsController = {
     const rx = await prescriptionsService.create(req.user, req.body, req);
     sendSuccess(res, 201, { data: rx, message: "Prescription created" });
   }),
+  update: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const rx = await prescriptionsService.update(req.user, req.params.id, req.body, req);
+    sendSuccess(res, 200, { data: rx, message: "Prescription updated" });
+  }),
   sign: asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
-    const rx = await prescriptionsService.sign(req.user, req.params.id, req);
+    const rx = await prescriptionsService.sign(req.user, req.params.id, req, req.body?.expectedUpdatedAt);
     sendSuccess(res, 200, { data: rx, message: "Prescription signed" });
   }),
   voidPrescription: asyncHandler(async (req: Request, res: Response) => {
@@ -110,8 +115,9 @@ router.post("/:id/share/:shareId/pdf", requireRole(["DOCTOR"]), prescriptionPdfU
 router.get("/", requireRole(["ADMIN", "DOCTOR", "PHARMACIST", "NURSE"]), validate({ query: listPrescriptionsQuerySchema }), prescriptionsController.list);
 router.get("/consultations/:consultationId/print", requireRole(["ADMIN", "DOCTOR", "PHARMACIST"]), validate({ params: z.object({ consultationId: z.string().uuid() }) }), prescriptionsController.printConsultation);
 router.get("/:id", requireRole(["ADMIN", "DOCTOR", "PHARMACIST", "NURSE"]), validate({ params: idParamSchema }), prescriptionsController.getById);
-router.post("/", requireRole(["ADMIN", "DOCTOR"]), validate({ body: createPrescriptionSchema }), prescriptionsController.create);
-router.post("/:id/sign", requireRole(["ADMIN", "DOCTOR"]), validate({ params: idParamSchema }), prescriptionsController.sign);
+router.post("/", requireRole(["ADMIN", "DOCTOR", "PHARMACIST"]), validate({ body: createPrescriptionSchema }), prescriptionsController.create);
+router.patch("/:id", requireRole(["ADMIN", "DOCTOR"]), validate({ params: idParamSchema, body: updatePrescriptionSchema }), prescriptionsController.update);
+router.post("/:id/sign", requireRole(["ADMIN", "DOCTOR", "PHARMACIST"]), validate({ params: idParamSchema }), prescriptionsController.sign);
 router.post(
   "/:id/void",
   requireRole(["ADMIN", "DOCTOR"]),
@@ -119,5 +125,18 @@ router.post(
   prescriptionsController.voidPrescription
 );
 router.get("/:id/print", requireRole(["ADMIN", "DOCTOR", "PHARMACIST"]), validate({ params: idParamSchema }), prescriptionsController.print);
+router.get(
+  "/:id/pdf",
+  requireRole(["ADMIN", "DOCTOR", "PHARMACIST", "NURSE"]),
+  validate({ params: idParamSchema }),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const { buffer, patientMrNumber } = await prescriptionsService.generatePrescriptionPdf(req.user, req.params.id);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="prescription-${patientMrNumber}.pdf"`);
+    res.send(buffer);
+  })
+);
 
 export default router;

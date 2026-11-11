@@ -7,14 +7,15 @@ import { Select } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
-import { api, apiAssetUrl, type ApiDepartment, type ApiDepartmentHod, type ApiDoctorSchedule, type ApiDoctorScheduleInput, type ApiError, type ApiHospitalProfile, type ApiLabTest, type ApiMedicineCategory, type ApiNotificationTemplate, type ApiNotificationTemplateInput, type ApiNotificationType, type ApiOTRoom, type ApiPermissionAction, type ApiRolePermission, type ApiScheduleDay, type ApiWard } from "@/lib/api"
+import { api, apiAssetUrl, type ApiDepartment, type ApiDepartmentHod, type ApiDoctorSchedule, type ApiDoctorScheduleInput, type ApiError, type ApiHospitalProfile, type ApiLabTest, type ApiMedicineCategory, type ApiNotificationTemplate, type ApiNotificationTemplateInput, type ApiNotificationType, type ApiOTRoom, type ApiPermissionAction, type ApiRolePermission, type ApiScheduleDay, type ApiUltrasoundDoctorSignature, type ApiUltrasoundScanType, type ApiUltrasoundTemplate, type ApiUltrasoundTemplateField, type ApiWard } from "@/lib/api"
 import { DEFAULT_HOSPITAL_PROFILE, storeHospitalProfile, useHospitalProfile } from "@/lib/hospitalProfile"
 import { Modal, ConfirmDialog } from "@/dashboard/components/Primitives"
-import { Activity, Baby, Bone, Brain, HeartPulse, Pill, Stethoscope, Syringe, Trash2 } from "lucide-react"
+import { Activity, Baby, Bone, Brain, CheckCircle2, Eye, EyeOff, HeartPulse, Pill, ShieldCheck, Stethoscope, Syringe, Trash2 } from "lucide-react"
+import { setStoredPermissions } from "@/dashboard/permissions"
 
 const SECTIONS = [
-  "Hospital Profile", "Departments", "Doctor Schedules", "Lab Tests", "Medicine Categories",
-  "Ward Setup", "Room/Bed Setup", "OT Rooms", "Invoice Settings", "Pharmacy Discounts", "Notification Templates", "Role Permissions",
+  "Hospital Profile", "Departments", "Doctor Schedules", "Lab Tests", "Ultrasound Templates", "Ultrasound Billing", "Medicine Categories",
+  "Ward Setup", "Room/Bed Setup", "OT Rooms", "Invoice Settings", "Pharmacy Discounts", "Notification Templates", "Role Permissions", "Admin Security",
 ] as const
 
 const DEFAULT_SETTINGS: Record<string, string> = {
@@ -23,6 +24,53 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   contact_phone: "+92 42 3587 4210",
   email: "info@khalida.pk",
   address: "12-B Gulberg III, Lahore, Pakistan",
+}
+
+function UltrasoundBillingPanel() {
+  const [catalog, setCatalog] = React.useState<ApiUltrasoundScanType[]>([])
+  const [doctors, setDoctors] = React.useState<ApiUltrasoundDoctorSignature[]>([])
+  const [uploadingDoctorId, setUploadingDoctorId] = React.useState("")
+  const [loading, setLoading] = React.useState(true)
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState("")
+  React.useEffect(() => {
+    let active = true
+    Promise.all([api.getUltrasoundScanCatalog(), api.listUltrasoundDoctors()]).then(([items, clinicians]) => { if (active) { setCatalog(items); setDoctors(clinicians) } })
+      .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "Unable to load scan fees.") })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+  const update = (name: ApiUltrasoundScanType["name"], change: Partial<ApiUltrasoundScanType>) =>
+    setCatalog((items) => items.map((item) => item.name === name ? { ...item, ...change } : item))
+  const save = async () => {
+    setSaving(true); setError("")
+    try { setCatalog(await api.updateUltrasoundScanCatalog(catalog)) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to save scan fees.") }
+    finally { setSaving(false) }
+  }
+  const uploadSignature = async (doctorId: string, file?: File) => {
+    if (!file) return
+    if (!["image/jpeg", "image/png"].includes(file.type)) { setError("Choose a PNG or JPEG signature image."); return }
+    setUploadingDoctorId(doctorId); setError("")
+    try {
+      const updated = await api.uploadUltrasoundDoctorSignature(doctorId, file)
+      setDoctors((items) => items.map((doctor) => doctor.id === updated.id ? updated : doctor))
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to upload signature.") }
+    finally { setUploadingDoctorId("") }
+  }
+  if (loading) return <p role="status" className="text-sm text-[var(--cp-ink-soft)]">Loading ultrasound billing settings…</p>
+  return <div className="flex flex-col gap-4">
+    <p className="text-sm text-[var(--cp-ink-soft)]">Configure scan availability and default fees. New orders use these prices unless a doctor explicitly enters a different fee.</p>
+    <p className="text-xs text-[var(--cp-ink-soft)]">Hospital logo, name, address, phone and report footer are shared with the main hospital profile. Use <a className="font-semibold text-[var(--cp-primary)] hover:underline" href="/dashboard/settings">Hospital Profile</a> to edit branding, and <a className="font-semibold text-[var(--cp-primary)] hover:underline" href="/dashboard/admin/backup">Backup & Restore</a> for the existing database backup tools.</p>
+    {catalog.length === 0 ? <p role="alert" className="text-sm text-[var(--cp-critical)]">Scan catalog is empty. Apply the ultrasound billing migration to seed scan types.</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left text-xs uppercase text-[var(--cp-ink-soft)]"><th className="py-2">Scan type</th><th>Fee</th><th>Enabled</th></tr></thead><tbody>{catalog.map((item) => <tr key={item.name} className="border-b last:border-0"><td className="py-3 font-medium">{item.name}</td><td><Input type="number" min="0" step="0.01" value={item.fee} onChange={(event) => update(item.name, { fee: Number(event.target.value) })} /></td><td><input type="checkbox" checked={item.enabled} onChange={(event) => update(item.name, { enabled: event.target.checked })} aria-label={`Enable ${item.name}`} /></td></tr>)}</tbody></table></div>}
+    {error && <p role="alert" className="text-sm text-[var(--cp-critical)]">{error}</p>}
+    <div className="flex justify-end"><Button onClick={() => void save()} disabled={saving || !catalog.length}>{saving ? "Saving…" : "Save scan fees"}</Button></div>
+    <section className="border-t border-[var(--cp-border)] pt-4">
+      <h3 className="mb-2 font-semibold">Doctor / radiologist signatures</h3>
+      {doctors.length ? <ul className="flex flex-col gap-2">{doctors.map((doctor) => <li key={doctor.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--cp-border)] p-3"><span className="text-sm">{doctor.user.name} <span className="text-xs text-[var(--cp-ink-soft)]">({doctor.user.role}) · {doctor.signatureUrl ? "Signature uploaded" : "No signature"}</span></span><label className="cursor-pointer text-sm font-medium text-[var(--cp-primary)]"><input className="sr-only" type="file" accept="image/png,image/jpeg" disabled={uploadingDoctorId === doctor.id} onChange={(event) => void uploadSignature(doctor.id, event.target.files?.[0])} />{uploadingDoctorId === doctor.id ? "Uploading…" : "Upload signature"}</label></li>)}</ul> : <p className="text-sm text-[var(--cp-ink-soft)]">No doctor or radiologist profiles found.</p>}
+      <p className="mt-2 text-xs text-[var(--cp-ink-soft)]">PNG/JPEG only, up to 2 MB. Uploads are stored in private files.</p>
+    </section>
+  </div>
 }
 
 const DEFAULT_PROFILE = DEFAULT_HOSPITAL_PROFILE
@@ -47,6 +95,99 @@ function SettingsField({ label, value, onChange, placeholder, textarea }: { labe
       {textarea ? <Textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} /> : <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />}
     </div>
   )
+}
+
+function ultrasoundTemplateFields(value: unknown): value is ApiUltrasoundTemplateField[] {
+  const types = new Set(["organ", "text", "number", "date", "select", "estimatedDueDate", "gestationalAge"])
+  return Array.isArray(value) && value.length > 0 && value.length <= 60 && value.every((item) => {
+    if (!item || typeof item !== "object") return false
+    const field = item as Record<string, unknown>
+    return typeof field.key === "string" && /^[a-zA-Z][a-zA-Z0-9_]*$/.test(field.key)
+      && typeof field.label === "string" && field.label.trim().length > 0
+      && typeof field.type === "string" && types.has(field.type)
+      && (field.unit === undefined || typeof field.unit === "string")
+      && (field.calculatedFrom === undefined || typeof field.calculatedFrom === "string")
+      && (field.patientGender === undefined || ["MALE", "FEMALE", "OTHER"].includes(String(field.patientGender)))
+      && (field.options === undefined || (Array.isArray(field.options) && field.options.every((option) => typeof option === "string")))
+  })
+}
+
+function UltrasoundTemplatesPanel() {
+  const { toast } = useToast()
+  const [templates, setTemplates] = React.useState<ApiUltrasoundTemplate[]>([])
+  const [selectedId, setSelectedId] = React.useState("")
+  const [json, setJson] = React.useState("")
+  const [loading, setLoading] = React.useState(true)
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState("")
+  const selected = templates.find((template) => template.id === selectedId)
+  const supportedTemplates = templates.filter((template) =>
+    ["obstetric", "abdomen", "kub", "renal", "pelvis", "thyroid", "breast", "doppler", "other"].includes(template.examinationType.toLowerCase()),
+  )
+
+  React.useEffect(() => {
+    let active = true
+    setLoading(true)
+    api.listManageableUltrasoundTemplates().then((items) => {
+      if (!active) return
+      const supported = items.filter((template) =>
+        ["obstetric", "abdomen", "kub", "renal", "pelvis", "thyroid", "breast", "doppler", "other"].includes(template.examinationType.toLowerCase()),
+      )
+      setTemplates(supported)
+      setSelectedId((id) => supported.some((template) => template.id === id) ? id : supported[0]?.id ?? "")
+      setError("")
+    }).catch((cause) => {
+      if (active) setError(cause instanceof Error ? cause.message : "Unable to load ultrasound templates.")
+    }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+
+  React.useEffect(() => {
+    if (selected) setJson(JSON.stringify(selected.sections, null, 2))
+  }, [selected])
+
+  const save = async () => {
+    setError("")
+    let fields: unknown
+    try { fields = JSON.parse(json) } catch { setError("Enter valid JSON before saving the template."); return }
+    if (!ultrasoundTemplateFields(fields)) {
+      setError("Template JSON must be an array of 1–60 fields with valid keys, labels, and field types.")
+      return
+    }
+
+    if (new Set(fields.map((field) => field.key)).size !== fields.length) {
+      setError("Each field in a template must have a unique key.")
+      return
+    }
+    setSaving(true)
+    try {
+      const updated = await api.updateUltrasoundTemplate(selectedId, fields)
+      setTemplates((items) => items.map((item) => item.id === updated.id ? updated : item))
+      toast({ title: "Template saved", description: `${updated.examinationType} reporting fields updated.`, variant: "success" })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to save ultrasound template.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <p role="status" className="text-sm text-[var(--cp-ink-soft)]">Loading ultrasound templates…</p>
+  if (error && supportedTemplates.length === 0) return <p role="alert" className="text-sm text-[var(--cp-critical)]">{error}</p>
+  return <div className="flex flex-col gap-4">
+    <p className="text-sm text-[var(--cp-ink-soft)]">Edit structured fields used by the Ultrasound completion form. Field types: organ, text, number, date, select, estimatedDueDate, gestationalAge.</p>
+    <div>
+      <Label htmlFor="ultrasound-template-select">Scan type</Label>
+      <Select id="ultrasound-template-select" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+        {supportedTemplates.map((template) => <option key={template.id} value={template.id}>{template.examinationType}</option>)}
+      </Select>
+    </div>
+    <div>
+      <Label htmlFor="ultrasound-template-json">Template fields (JSON)</Label>
+      <Textarea id="ultrasound-template-json" value={json} onChange={(event) => setJson(event.target.value)} rows={16} spellCheck={false} className="font-mono text-xs" />
+    </div>
+    {error && <p role="alert" className="text-sm text-[var(--cp-critical)]">{error}</p>}
+    <div className="flex justify-end"><Button size="sm" onClick={() => void save()} disabled={saving || loading || !selected}>{saving ? "Saving…" : "Save template"}</Button></div>
+  </div>
 }
 
 const DEPARTMENT_ICONS = { HeartPulse, Bone, Baby, Brain, Pill, Stethoscope, Syringe, Activity }
@@ -628,6 +769,7 @@ function RolePermissionsPanel() {
       window.localStorage.removeItem(permissionStorageKey)
     }
     api.listRolePermissions().then((items) => {
+      setStoredPermissions(items)
       const source = storedRows?.length ? storedRows : defaultPermissionRows
       const rows = source.map((row) => ({ ...row }))
       for (const role of permissionRoles) {
@@ -656,6 +798,8 @@ function RolePermissionsPanel() {
     try {
       const builtInRows = permissions.filter((item) => permissionRoles.includes(item.role))
       await Promise.all(builtInRows.flatMap((row) => permissionModules.map((module) => api.updateRolePermission({ role: row.role, module, allowedActions: permissionActionsByLevel[row[module]] }))))
+      const updatedList = await api.listRolePermissions()
+      setStoredPermissions(updatedList)
       window.localStorage.setItem(permissionStorageKey, JSON.stringify(permissions))
       toast({ title: "Role permissions saved", description: "Your permission changes are now persistent.", variant: "success" })
     } catch (error) {
@@ -664,6 +808,213 @@ function RolePermissionsPanel() {
   }
   if (loading) return <p className="text-sm text-[var(--cp-ink-soft)]">Loading role permissions...</p>
   return <div className="flex flex-col gap-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-semibold">Manage access by role</p><p className="text-xs text-[var(--cp-ink-soft)]">Changes apply after saving.</p></div><div className="flex gap-2"><Input value={newRole} onChange={(event) => setNewRole(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") addRole() }} placeholder="New role name" aria-label="New role name" /><Button variant="outline" onClick={addRole}>+ Add Role</Button></div></div><div className="overflow-x-auto rounded-lg border border-[var(--cp-border)]"><table className="w-full min-w-[760px] text-sm"><thead><tr className="border-b border-[var(--cp-border)] bg-[var(--cp-bg)] text-left text-xs uppercase text-[var(--cp-ink-soft)]"><th className="p-3">Role</th><th className="p-3">Ward Access</th><th className="p-3">Billing Access</th><th className="p-3">Reports</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{permissions.map((row) => <tr key={row.role} className="border-b border-[var(--cp-border)] last:border-0"><td className="p-2 font-semibold">{row.role.replace(/_/g, " ")}</td>{permissionModules.map((module) => <td key={module} className="p-2"><Select value={row[module]} onChange={(event) => updatePermission(row.role, module, event.target.value as PermissionLevel)} aria-label={`${row.role} ${module} access`}>{permissionLevels.map((level) => <option key={level} value={level}>{level}</option>)}</Select></td>)}<td className="p-2 text-right"><Button variant="ghost" size="sm" onClick={() => setPermissions((items) => items.filter((item) => item.role !== row.role))}>Delete</Button></td></tr>)}</tbody></table></div><div className="flex justify-end"><Button onClick={() => void save()} disabled={saving}>{saving ? "Saving..." : "Save Changes"}</Button></div></div>
+}
+
+function AdminSecurityPanel() {
+  const { toast } = useToast()
+  const [currentPassword, setCurrentPassword] = React.useState("")
+  const [newPassword, setNewPassword] = React.useState("")
+  const [confirmPassword, setConfirmPassword] = React.useState("")
+  const [showCurrent, setShowCurrent] = React.useState(false)
+  const [showNew, setShowNew] = React.useState(false)
+  const [showConfirm, setShowConfirm] = React.useState(false)
+  const [loading, setLoading] = React.useState(false)
+  const [successMessage, setSuccessMessage] = React.useState("")
+  const [errorMessage, setErrorMessage] = React.useState("")
+
+  const hasLength = newPassword.length >= 8
+  const hasUpper = /[A-Z]/.test(newPassword)
+  const hasLower = /[a-z]/.test(newPassword)
+  const hasNumber = /[0-9]/.test(newPassword)
+  const hasSpecial = /[^a-zA-Z0-9]/.test(newPassword)
+  const passwordsMatch = newPassword.length > 0 && newPassword === confirmPassword
+  const isPolicySatisfied = hasLength && hasUpper && hasLower && hasNumber && hasSpecial
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setErrorMessage("")
+    setSuccessMessage("")
+
+    if (!currentPassword) {
+      setErrorMessage("Please enter your current password.")
+      return
+    }
+    if (!isPolicySatisfied) {
+      setErrorMessage("New password does not satisfy all security requirements.")
+      return
+    }
+    if (!passwordsMatch) {
+      setErrorMessage("New password and confirm password do not match.")
+      return
+    }
+
+    setLoading(true)
+    try {
+      const res = await api.changePassword({ currentPassword, newPassword })
+      setSuccessMessage(res.message || "Password changed successfully! Please log in again if required.")
+      toast({
+        title: "Password changed successfully",
+        description: "Your password has been updated. Other sessions have been revoked.",
+        variant: "success",
+      })
+      setCurrentPassword("")
+      setNewPassword("")
+      setConfirmPassword("")
+    } catch (err) {
+      setErrorMessage((err as ApiError).message || "Failed to change password. Please check your current password.")
+      toast({
+        title: "Change password failed",
+        description: (err as ApiError).message || "Please check your current password.",
+        variant: "error",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="max-w-xl space-y-6">
+      <div className="rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-6 cp-shadow">
+        <div className="mb-4 flex items-center gap-3 border-b border-[var(--cp-border)] pb-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--cp-primary-light)] text-[var(--cp-primary)]">
+            <ShieldCheck className="h-5 w-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-[var(--cp-ink)]">Change Admin Password</h3>
+            <p className="text-xs text-[var(--cp-ink-soft)]">
+              Update your account password. For security, other active sessions and refresh tokens will be revoked.
+            </p>
+          </div>
+        </div>
+
+        {successMessage && (
+          <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-800">
+            <div className="flex items-center gap-2 font-medium">
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+              {successMessage}
+            </div>
+            <p className="mt-1 text-xs text-emerald-700">
+              You may continue using the current session or re-authenticate from the login portal.
+            </p>
+          </div>
+        )}
+
+        {errorMessage && (
+          <div className="mb-4 rounded-lg border border-[var(--cp-critical)] bg-[var(--cp-critical-light)] p-3 text-sm text-[var(--cp-critical)]">
+            {errorMessage}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <Label htmlFor="current-pwd">Current Password</Label>
+            <div className="relative mt-1">
+              <Input
+                id="current-pwd"
+                type={showCurrent ? "text" : "password"}
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Enter current password"
+                autoComplete="current-password"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowCurrent(!showCurrent)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--cp-ink-soft)] hover:text-[var(--cp-ink)]"
+                aria-label={showCurrent ? "Hide password" : "Show password"}
+              >
+                {showCurrent ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <Label htmlFor="new-pwd">New Password</Label>
+            <div className="relative mt-1">
+              <Input
+                id="new-pwd"
+                type={showNew ? "text" : "password"}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Enter strong new password"
+                autoComplete="new-password"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowNew(!showNew)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--cp-ink-soft)] hover:text-[var(--cp-ink)]"
+                aria-label={showNew ? "Hide password" : "Show password"}
+              >
+                {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] p-3 text-xs">
+            <p className="mb-2 font-semibold text-[var(--cp-ink)]">Password Policy Requirements:</p>
+            <ul className="space-y-1">
+              <li className={cn("flex items-center gap-1.5", hasLength ? "font-medium text-emerald-600" : "text-[var(--cp-ink-soft)]")}>
+                {hasLength ? <CheckCircle2 className="h-3.5 w-3.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />}
+                At least 8 characters long
+              </li>
+              <li className={cn("flex items-center gap-1.5", hasUpper ? "font-medium text-emerald-600" : "text-[var(--cp-ink-soft)]")}>
+                {hasUpper ? <CheckCircle2 className="h-3.5 w-3.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />}
+                At least one uppercase letter (A-Z)
+              </li>
+              <li className={cn("flex items-center gap-1.5", hasLower ? "font-medium text-emerald-600" : "text-[var(--cp-ink-soft)]")}>
+                {hasLower ? <CheckCircle2 className="h-3.5 w-3.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />}
+                At least one lowercase letter (a-z)
+              </li>
+              <li className={cn("flex items-center gap-1.5", hasNumber ? "font-medium text-emerald-600" : "text-[var(--cp-ink-soft)]")}>
+                {hasNumber ? <CheckCircle2 className="h-3.5 w-3.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />}
+                At least one number (0-9)
+              </li>
+              <li className={cn("flex items-center gap-1.5", hasSpecial ? "font-medium text-emerald-600" : "text-[var(--cp-ink-soft)]")}>
+                {hasSpecial ? <CheckCircle2 className="h-3.5 w-3.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />}
+                At least one special character (!@#$%^&*...)
+              </li>
+            </ul>
+          </div>
+
+          <div>
+            <Label htmlFor="confirm-pwd">Confirm New Password</Label>
+            <div className="relative mt-1">
+              <Input
+                id="confirm-pwd"
+                type={showConfirm ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Confirm new password"
+                autoComplete="new-password"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirm(!showConfirm)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--cp-ink-soft)] hover:text-[var(--cp-ink)]"
+                aria-label={showConfirm ? "Hide password" : "Show password"}
+              >
+                {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            {confirmPassword.length > 0 && (
+              <p className={cn("mt-1.5 text-xs font-medium", passwordsMatch ? "text-emerald-600" : "text-[var(--cp-critical)]")}>
+                {passwordsMatch ? "✓ Passwords match" : "✗ Passwords do not match"}
+              </p>
+            )}
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button type="submit" disabled={loading || !currentPassword || !isPolicySatisfied || !passwordsMatch}>
+              {loading ? "Updating Password..." : "Update Password"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
 }
 
 function SectionPanel({ section }: { section: string }) {
@@ -729,6 +1080,7 @@ function SectionPanel({ section }: { section: string }) {
           clinicDaysTimings: profile.clinicDaysTimings?.trim() || null,
           refillText: profile.refillText?.trim() || null,
           dispensingStampText: profile.dispensingStampText?.trim() || null,
+          reportFooter: profile.reportFooter?.trim() || null,
         }
         const saved = await api.updateHospitalProfile(payload); storeHospitalProfile(saved); setProfile(saved)
       }
@@ -759,6 +1111,7 @@ function SectionPanel({ section }: { section: string }) {
         <div className="sm:col-span-2"><SettingsField label="Clinic Days & Timings" value={profile.clinicDaysTimings ?? ""} onChange={(value) => updateProfile("clinicDaysTimings", value)} textarea placeholder="e.g. Mon-Sat, 9:00 AM - 5:00 PM" /></div>
         <div className="sm:col-span-2"><SettingsField label="Prescription Refill Text" value={profile.refillText ?? ""} onChange={(value) => updateProfile("refillText", value)} placeholder="e.g. Refills: 0 1 2 3 4" /></div>
         <div className="sm:col-span-2"><SettingsField label="Dispensing Stamp Text" value={profile.dispensingStampText ?? ""} onChange={(value) => updateProfile("dispensingStampText", value)} placeholder="Optional digital dispensing note" /></div>
+        <div className="sm:col-span-2"><SettingsField label="Ultrasound report footer" value={profile.reportFooter ?? ""} onChange={(value) => updateProfile("reportFooter", value)} textarea placeholder="Optional report footer text" /></div>
         <div><Label>Hospital Logo</Label><label className="mt-1 flex min-h-28 cursor-pointer items-center justify-center rounded-lg border border-dashed border-[var(--cp-border-strong)] p-3 text-center text-sm text-[var(--cp-ink-soft)]"><input className="sr-only" type="file" accept="image/png,image/jpeg,image/svg+xml" onChange={(e) => uploadAsset("logo", e.target.files?.[0])} />{profile.logoUrl ? <img src={apiAssetUrl(profile.logoUrl)} alt="Hospital logo" className="max-h-20 max-w-full object-contain" /> : uploading === "logo" ? "Uploading..." : "Drop or click to upload"}</label></div>
         <div><Label>Favicon</Label><label className="mt-1 flex min-h-28 cursor-pointer items-center justify-center rounded-lg border border-dashed border-[var(--cp-border-strong)] p-3 text-center text-sm text-[var(--cp-ink-soft)]"><input className="sr-only" type="file" accept="image/png,image/jpeg,image/svg+xml,image/x-icon" onChange={(e) => uploadAsset("favicon", e.target.files?.[0])} />{profile.faviconUrl ? <img src={apiAssetUrl(profile.faviconUrl)} alt="Hospital favicon" className="h-8 w-8 object-contain" /> : uploading === "favicon" ? "Uploading..." : "Upload 32 x 32 icon"}</label></div>
       </div>
@@ -771,6 +1124,12 @@ function SectionPanel({ section }: { section: string }) {
     ),
     "Lab Tests": (
       <LabTestsPanel />
+    ),
+    "Ultrasound Templates": (
+      <UltrasoundTemplatesPanel />
+    ),
+    "Ultrasound Billing": (
+      <UltrasoundBillingPanel />
     ),
     "Notification Templates": (
       <NotificationTemplatesPanel />
@@ -796,12 +1155,15 @@ function SectionPanel({ section }: { section: string }) {
     "Role Permissions": (
       <RolePermissionsPanel />
     ),
+    "Admin Security": (
+      <AdminSecurityPanel />
+    ),
   }
 
   return (
     <div className="flex flex-col gap-4">
       {content[section]}
-      {section !== "Doctor Schedules" && section !== "Notification Templates" && section !== "Ward Setup" && section !== "Room/Bed Setup" && section !== "OT Rooms" && section !== "Medicine Categories" && section !== "Invoice Settings" && section !== "Pharmacy Discounts" && section !== "Role Permissions" && <div className="flex justify-end border-t border-[var(--cp-border)] pt-4">
+      {section !== "Doctor Schedules" && section !== "Notification Templates" && section !== "Ultrasound Templates" && section !== "Ward Setup" && section !== "Room/Bed Setup" && section !== "OT Rooms" && section !== "Medicine Categories" && section !== "Invoice Settings" && section !== "Pharmacy Discounts" && section !== "Role Permissions" && section !== "Admin Security" && <div className="flex justify-end border-t border-[var(--cp-border)] pt-4">
         <Button size="sm" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save Changes"}</Button>
       </div>}
     </div>

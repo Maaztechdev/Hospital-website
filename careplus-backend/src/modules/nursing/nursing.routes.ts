@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Request, Response, Router } from "express";
 import { Prisma, ShiftType } from "@prisma/client";
 import { prisma } from "@config/prisma";
-import { NotFoundError, ConflictError } from "@common/errors/AppError";
+import { NotFoundError, ConflictError, BadRequestError } from "@common/errors/AppError";
 import { writeAuditLog } from "@common/utils/auditLog";
 import { AccessTokenPayload, authenticate } from "@common/middleware/authenticate";
 import { requireRole } from "@common/middleware/requireRole";
@@ -22,7 +22,9 @@ const createAssignmentSchema = z.object({
 });
 
 const recordVitalsSchema = z.object({
-  admissionId: z.string().uuid(),
+  admissionId: z.string().uuid().optional(),
+  appointmentId: z.string().uuid().optional(),
+  patientId: z.string().uuid().optional(),
   bpSystolic: z.number().int().optional(),
   bpDiastolic: z.number().int().optional(),
   temperature: z.number().optional(),
@@ -30,7 +32,11 @@ const recordVitalsSchema = z.object({
   respiratoryRate: z.number().int().optional(),
   oxygenSaturation: z.number().int().optional(),
   painScore: z.number().int().min(0).max(10).optional(),
+  weight: z.number().optional(),
+  heightCm: z.number().optional(),
   notes: z.string().optional(),
+}).refine((data) => Boolean(data.admissionId || data.appointmentId || data.patientId), {
+  message: "Either admissionId or appointmentId must be provided",
 });
 
 const createTaskSchema = z.object({
@@ -62,16 +68,72 @@ const nursingService = {
   },
 
   async recordVitals(actor: AccessTokenPayload, input: z.infer<typeof recordVitalsSchema>, req?: Request) {
-    const admission = await prisma.admission.findUnique({ where: { id: input.admissionId } });
-    if (!admission) throw new NotFoundError("Admission not found");
-    if (admission.status !== "ACTIVE") throw new ConflictError("Cannot record vitals for a non-active admission");
-    await assertDoctorOwns(actor, admission.attendingDoctorId);
+    if (input.admissionId) {
+      const admission = await prisma.admission.findUnique({ where: { id: input.admissionId } });
+      if (!admission) throw new NotFoundError("Admission not found");
+      if (admission.status !== "ACTIVE") throw new ConflictError("Cannot record vitals for a non-active admission");
+      await assertDoctorOwns(actor, admission.attendingDoctorId);
 
-    const vitals = await prisma.patientVitals.create({
-      data: { ...input, patientId: admission.patientId, recordedBy: actor.sub },
-    });
-    await writeAuditLog({ userId: actor.sub, action: "CREATE", module: "nursing", entityType: "PatientVitals", entityId: vitals.id, newValues: vitals, req });
-    return vitals;
+      const vitals = await prisma.patientVitals.create({
+        data: {
+          admissionId: input.admissionId,
+          patientId: admission.patientId,
+          recordedBy: actor.sub,
+          bpSystolic: input.bpSystolic,
+          bpDiastolic: input.bpDiastolic,
+          temperature: input.temperature,
+          pulse: input.pulse,
+          respiratoryRate: input.respiratoryRate,
+          oxygenSaturation: input.oxygenSaturation,
+          painScore: input.painScore,
+          notes: input.notes,
+        },
+      });
+      await writeAuditLog({ userId: actor.sub, action: "CREATE", module: "nursing", entityType: "PatientVitals", entityId: vitals.id, newValues: vitals, req });
+      return vitals;
+    }
+
+    if (input.appointmentId) {
+      const appointment = await prisma.appointment.findUnique({
+        where: { id: input.appointmentId },
+        include: { doctor: true },
+      });
+      if (!appointment) throw new NotFoundError("Appointment not found");
+
+      const consultation = await prisma.consultation.upsert({
+        where: { appointmentId: input.appointmentId },
+        create: {
+          appointmentId: input.appointmentId,
+          patientId: appointment.patientId,
+          doctorId: appointment.doctorId,
+          bpSystolic: input.bpSystolic,
+          bpDiastolic: input.bpDiastolic,
+          temperature: input.temperature,
+          temperatureUnit: "C",
+          pulse: input.pulse,
+          respiratoryRate: input.respiratoryRate,
+          oxygenSaturation: input.oxygenSaturation,
+          weight: input.weight,
+          heightCm: input.heightCm,
+          clinicalNotes: input.notes ? `Triage notes: ${input.notes}` : null,
+        },
+        update: {
+          bpSystolic: input.bpSystolic,
+          bpDiastolic: input.bpDiastolic,
+          temperature: input.temperature,
+          pulse: input.pulse,
+          respiratoryRate: input.respiratoryRate,
+          oxygenSaturation: input.oxygenSaturation,
+          weight: input.weight,
+          heightCm: input.heightCm,
+          clinicalNotes: input.notes ? `Triage notes: ${input.notes}` : undefined,
+        },
+      });
+      await writeAuditLog({ userId: actor.sub, action: "CREATE", module: "nursing", entityType: "ConsultationVitals", entityId: consultation.id, newValues: consultation, req });
+      return consultation;
+    }
+
+    throw new BadRequestError("Provide either an admissionId or an appointmentId to record vitals");
   },
 
   async vitalsHistory(actor: AccessTokenPayload, admissionId: string) {

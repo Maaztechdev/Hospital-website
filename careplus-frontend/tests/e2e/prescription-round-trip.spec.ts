@@ -35,7 +35,8 @@ test("manual prescription is flagged for pharmacist review", async ({ page, requ
   }, pharmacistSession)
   await page.goto("/dashboard/pharmacy")
   await expect(page.getByText("Prescriptions", { exact: true }).last()).toBeVisible()
-  await page.getByText("Prescriptions", { exact: true }).last().click()
+  await page.getByRole("tab", { name: "Prescriptions" }).click()
+  await page.getByPlaceholder(/Search patient, MR#, doctor/).fill(fixture.mrNumber)
   await expect(page.getByText("Round Trip Medicine", { exact: true }).first()).toBeVisible()
   const manualPrescriptionRow = page.getByRole("row").filter({ hasText: "Round Trip Medicine" }).first()
   await expect(manualPrescriptionRow).toContainText("SIGNED")
@@ -53,7 +54,29 @@ test("allergy override requires confirmation and writes an audit record", async 
   const fixture = await createDoctorAppointment(request)
   const doctorSession = await apiLoginAs(request, { email: "dr.ahmed@careplus.local", password: "Doctor@12345" })
   const doctorHeaders = { Authorization: `Bearer ${doctorSession.accessToken}` }
+  const adminSession = await apiLoginAs(request, pharmacist)
+  const adminHeaders = { Authorization: `Bearer ${adminSession.accessToken}` }
+  const medicineName = `Amoxicillin E2E ${Date.now()}`
+  const medicineResponse = await request.post(`${apiBase}/pharmacy/medicines`, {
+    headers: adminHeaders,
+    data: { name: medicineName, genericName: "Amoxicillin", strength: "500 mg", form: "Capsule", unitType: "CAPSULE" },
+  })
+  expect(medicineResponse.ok(), await medicineResponse.text()).toBeTruthy()
+  const medicine = (await medicineResponse.json()).data as { id: string }
+  const patientResponse = await request.get(`${apiBase}/patients?search=${encodeURIComponent(fixture.mrNumber)}`, { headers: doctorHeaders })
+  expect(patientResponse.ok()).toBeTruthy()
+  const patient = ((await patientResponse.json()).data as Array<{ id: string }>)[0]
+  expect(patient).toBeTruthy()
+  const summaryResponse = await request.get(`${apiBase}/patients/${patient.id}/clinical-summary`, { headers: doctorHeaders })
+  expect(summaryResponse.ok()).toBeTruthy()
+  const initialSummary = (await summaryResponse.json()).data as { allergies: string[]; chronicConditions: string[] }
+  const setupResponse = await request.patch(`${apiBase}/patients/${patient.id}/clinical-summary`, {
+    headers: doctorHeaders,
+    data: { allergies: ["Penicillin"], allergiesReviewed: true, chronicConditions: initialSummary.chronicConditions, chronicConditionsReviewed: true },
+  })
+  expect(setupResponse.ok(), await setupResponse.text()).toBeTruthy()
 
+  try {
   await page.goto("/dashboard/login")
   await page.evaluate((tokens) => {
     sessionStorage.setItem("careplus.accessToken", tokens.accessToken)
@@ -71,12 +94,17 @@ test("allergy override requires confirmation and writes an audit record", async 
   await page.getByLabel("Chief Complaint").fill("Allergy override review")
   await page.getByLabel("Diagnosis").fill("Allergy override review")
   await page.getByRole("button", { name: "Add Medicine" }).click()
-  await page.getByLabel("Medicine 1").fill("Amoxicillin")
-  await page.locator("[data-other-medicine-option] button").click()
+  const medicineInput = page.getByLabel("Medicine 1")
+  await medicineInput.fill(medicineName)
+  const allergyConfirmation = page.waitForEvent("dialog")
+  const selectMedicine = page.getByRole("button", { name: new RegExp(medicineName) }).click()
+  const allergyConfirmDialog = await allergyConfirmation
+  expect(allergyConfirmDialog.message()).toContain("Penicillin")
+  await allergyConfirmDialog.accept()
+  await selectMedicine
+  await page.getByLabel("Dose").fill("1")
+  await page.getByLabel("Duration").fill("5")
   await page.getByRole("button", { name: "Sign Prescription" }).click()
-  const allergyDialog = page.getByRole("dialog", { name: "Allergy warning" })
-  await expect(allergyDialog).toContainText("recorded allergy to Penicillin")
-  await allergyDialog.getByRole("button", { name: "Prescribe anyway" }).click()
   await expect(page.getByText("Prescription signed", { exact: true })).toBeVisible()
 
   const consultationsResponse = await request.get(`${apiBase}/consultations?appointmentId=${fixture.appointmentId}`, { headers: doctorHeaders })
@@ -92,4 +120,18 @@ test("allergy override requires confirmation and writes an audit record", async 
   })
   expect(auditResponse.ok()).toBeTruthy()
   expect((await auditResponse.json()).data).toHaveLength(1)
+  } finally {
+    const restoreResponse = await request.patch(`${apiBase}/patients/${patient.id}/clinical-summary`, {
+      headers: doctorHeaders,
+      data: {
+        allergies: initialSummary.allergies,
+        allergiesReviewed: true,
+        chronicConditions: initialSummary.chronicConditions,
+        chronicConditionsReviewed: true,
+      },
+    })
+    expect(restoreResponse.ok(), await restoreResponse.text()).toBeTruthy()
+    const archiveResponse = await request.delete(`${apiBase}/pharmacy/medicines/${medicine.id}`, { headers: adminHeaders })
+    expect(archiveResponse.ok(), await archiveResponse.text()).toBeTruthy()
+  }
 })

@@ -129,9 +129,14 @@ export function Header() {
     ? medicineResults.length > 0
     : !!searchResults && (searchResults.patients.length + searchResults.doctors.length + searchResults.beds.length > 0)
 
+  function pharmacySearchPath(query: string) {
+    const workspaceSection = currentUser?.role === "admin" ? "section=work-items&" : ""
+    return `/dashboard/pharmacy?${workspaceSection}search=${encodeURIComponent(query)}`
+  }
+
   function onSearchSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (search.trim()) navigate(pharmacySearchMode ? `/dashboard/pharmacy?search=${encodeURIComponent(search.trim())}` : `/dashboard/patients?q=${encodeURIComponent(search.trim())}`)
+    if (search.trim()) navigate(pharmacySearchMode ? pharmacySearchPath(search.trim()) : `/dashboard/patients?q=${encodeURIComponent(search.trim())}`)
     setSearchOpen(false)
   }
 
@@ -163,7 +168,7 @@ export function Header() {
                   : <div className="max-h-80 overflow-y-auto cp-scrollbar">
                     {medicineResults.map((medicine) => {
                       const stock = medicine.batches.reduce((total, batch) => total + batch.stockQuantity, 0)
-                      return <button key={medicine.id} type="button" onClick={() => { navigate(`/dashboard/pharmacy?search=${encodeURIComponent(medicine.name)}`); setSearchOpen(false); setSearch("") }} className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-[var(--cp-bg)]">
+                      return <button key={medicine.id} type="button" onClick={() => { navigate(pharmacySearchPath(medicine.name)); setSearchOpen(false); setSearch("") }} className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-[var(--cp-bg)]">
                         <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--cp-primary-light)] text-[var(--cp-primary)]"><Pill className="h-3.5 w-3.5" /></span>
                         <span><span className="block text-sm text-[var(--cp-ink)]">{medicine.name}</span><span className="block text-xs text-[var(--cp-ink-soft)]">{medicine.genericName ?? medicine.strength ?? "Medicine"} · {stock} in stock</span></span>
                       </button>

@@ -8,11 +8,11 @@ import { useDashboard } from "@/dashboard/store/DashboardContext"
 import type { Admission, Bed } from "@/dashboard/types"
 import { formatCurrency, formatDateTime } from "@/dashboard/lib/format"
 import { useToast } from "@/hooks/use-toast"
-import { api, openAuthenticatedPrintWindow } from "@/lib/api"
+import { api, openAuthenticatedPrintWindow, type ApiIpdRunningBill, type ApiPayment } from "@/lib/api"
 import { StaffSignatureBlock } from "@/dashboard/components/StaffSignatureBlock"
 
 export function DischargeModal({ bed, onClose, open, admissionOverride }: { bed: Bed | null; onClose: () => void; open?: boolean; admissionOverride?: Admission }) {
-  const { admissions, refreshWardState } = useDashboard()
+  const { admissions, refreshWardState, currentUser } = useDashboard()
   const { toast } = useToast()
   const [diagnosis, setDiagnosis] = React.useState("")
   const [courseInHospital, setCourseInHospital] = React.useState("")
@@ -22,9 +22,18 @@ export function DischargeModal({ bed, onClose, open, admissionOverride }: { bed:
   const [referral, setReferral] = React.useState("")
   const [instructions, setInstructions] = React.useState("")
   const [overrideBalance, setOverrideBalance] = React.useState(false)
+  const [overrideReason, setOverrideReason] = React.useState("")
+  const isAdmin = currentUser?.role?.toLowerCase() === "admin"
   const [confirmOpen, setConfirmOpen] = React.useState(false)
   const [done, setDone] = React.useState(false)
   const [attendingDoctorUserId, setAttendingDoctorUserId] = React.useState<string | null>(null)
+  const [liveBalance, setLiveBalance] = React.useState<number | null>(null)
+  const [runningBill, setRunningBill] = React.useState<ApiIpdRunningBill | null>(null)
+  const [billLoading, setBillLoading] = React.useState(false)
+  const [billError, setBillError] = React.useState("")
+  const [settlementMethod, setSettlementMethod] = React.useState<ApiPayment["paymentMethod"]>("CASH")
+  const [refundReason, setRefundReason] = React.useState("")
+  const [settling, setSettling] = React.useState(false)
 
   React.useEffect(() => {
     setDiagnosis("")
@@ -38,38 +47,118 @@ export function DischargeModal({ bed, onClose, open, admissionOverride }: { bed:
     setConfirmOpen(false)
     setDone(false)
     setAttendingDoctorUserId(null)
+    setLiveBalance(null)
+    setRunningBill(null)
+    setBillError("")
+    setRefundReason("")
+    setSettlementMethod("CASH")
   }, [bed])
 
-  if (!bed) return null
-  const admission = admissionOverride ?? admissions.find((a) => a.id === bed.admissionId)
-  if (!admission) return null
+  const admission = bed ? (admissionOverride ?? admissions.find((a) => a.id === bed.admissionId)) : null
+
+  React.useEffect(() => {
+    if (admission?.id) {
+      let active = true
+      setBillLoading(true)
+      setBillError("")
+      Promise.all([api.getAdmission(admission.id), api.getIpdRunningBill(admission.id)])
+        .then(([detail, bill]) => {
+          if (!active) return
+          setAttendingDoctorUserId(detail.attendingDoctor?.user.id ?? null)
+          setLiveBalance(Number(bill.totals.balance))
+          setRunningBill(bill)
+        })
+        .catch((cause: unknown) => {
+          if (!active) return
+          const message = cause instanceof Error ? cause.message : "Unable to load the final bill preview."
+          setBillError(message)
+          toast({ title: "Unable to load final bill preview", description: message, variant: "error" })
+        })
+        .finally(() => { if (active) setBillLoading(false) })
+      return () => { active = false }
+    }
+  }, [admission?.id, toast])
+
+  if (!bed || !admission) return null
+
+  const effectiveBalance = liveBalance ?? admission.outstandingBalance
+  const netFinalBalance = runningBill ? Number(runningBill.totals.charged) - Number(runningBill.totals.paid) : Number(effectiveBalance)
+  const canRefundDeposit = currentUser?.role === "admin" || currentUser?.role === "billing_manager"
 
   const canDischarge = diagnosis.trim().length > 0
     && conditionAtDischarge.trim().length > 0
     && instructions.trim().length > 0
-    && (admission.outstandingBalance <= 0 || overrideBalance)
+    && (effectiveBalance <= 0 || overrideBalance)
 
   async function submit() {
     if (!admission) return
     try {
-    const detail = await api.getAdmission(admission.id)
-    setAttendingDoctorUserId(detail.attendingDoctor?.user.id ?? null)
-    await api.dischargeAdmission(admission.id, {
-      diagnosis: diagnosis.trim(),
-      courseInHospital: courseInHospital.trim(),
-      medications: medications.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
-      conditionAtDischarge: conditionAtDischarge.trim(),
-      ...(followUpDate ? { followUpDate } : {}),
-      referral: referral.trim(),
-      instructions: instructions.trim(),
-      confirmUnpaidBalance: admission.outstandingBalance > 0 && overrideBalance,
-    })
+      const [detail, billPreview] = await Promise.all([
+        api.getAdmission(admission.id),
+        api.getIpdRunningBill(admission.id).catch((cause: unknown) => {
+          setBillError(cause instanceof Error ? cause.message : "Unable to refresh the bill preview.")
+          return null
+        }),
+      ])
+      setAttendingDoctorUserId(detail.attendingDoctor?.user.id ?? null)
+      if (billPreview) {
+        setRunningBill(billPreview)
+        setLiveBalance(Number(billPreview.totals.balance))
+      }
+      const finalBalance = Number(billPreview?.totals.balance ?? detail.outstandingBalance ?? effectiveBalance ?? 0)
+      await api.dischargeAdmission(admission.id, {
+        diagnosis: diagnosis.trim(),
+        courseInHospital: courseInHospital.trim(),
+        medications: medications.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+        conditionAtDischarge: conditionAtDischarge.trim(),
+        ...(followUpDate ? { followUpDate } : {}),
+        referral: referral.trim(),
+        instructions: instructions.trim(),
+        confirmUnpaidBalance: finalBalance > 0 ? overrideBalance : (overrideBalance || undefined),
+        overrideReason: finalBalance > 0 && overrideBalance ? overrideReason.trim() : undefined,
+      })
       await refreshWardState()
       toast({ title: "Patient discharged", description: `${admission.patientName} discharged from ${admission.bedNumber}.`, variant: "success" })
+      try {
+        const finalBill = await api.getIpdRunningBill(admission.id)
+        setRunningBill(finalBill)
+        setLiveBalance(Number(finalBill.totals.balance))
+        setBillError("")
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : "The patient was discharged, but the final bill preview could not be refreshed."
+        setBillError(message)
+        toast({ title: "Discharged; final bill refresh failed", description: message, variant: "error" })
+      }
       setConfirmOpen(false)
       setDone(true)
     } catch (error) {
       toast({ title: "Discharge failed", description: error instanceof Error ? error.message : "Unable to discharge patient.", variant: "error" })
+    }
+  }
+
+  async function settleFinalBill() {
+    if (!admission || !runningBill) return
+    const refundExcess = netFinalBalance < 0
+    if (refundExcess && !refundReason.trim()) return
+    setSettling(true)
+    try {
+      await api.settleIpdInvoice(admission.id, {
+        paymentMethod: settlementMethod,
+        ...(refundExcess ? { refundReason: refundReason.trim() } : {}),
+      })
+      const updatedBill = await api.getIpdRunningBill(admission.id)
+      setRunningBill(updatedBill)
+      setLiveBalance(Number(updatedBill.totals.balance))
+      setRefundReason("")
+      toast({
+        title: refundExcess ? "Excess deposit refunded" : "Final bill settled",
+        description: refundExcess ? "The excess deposit was refunded and recorded in the invoice history." : "The final balance has been collected.",
+        variant: "success",
+      })
+    } catch (cause) {
+      toast({ title: "Unable to settle final bill", description: cause instanceof Error ? cause.message : "Please try again.", variant: "error" })
+    } finally {
+      setSettling(false)
     }
   }
 
@@ -94,6 +183,61 @@ export function DischargeModal({ bed, onClose, open, admissionOverride }: { bed:
             <p className="mt-2 text-xs text-[var(--cp-ink-faint)]">Discharged {formatDateTime(new Date().toISOString())}</p>
             <div className="mt-6 flex justify-end border-t border-[var(--cp-border)] pt-4"><StaffSignatureBlock userId={attendingDoctorUserId} title="Attending Doctor" showStamp /></div>
           </div>
+          <div className="rounded-xl border border-[var(--cp-border)] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-[var(--cp-ink)]">Final bill preview</p>
+              <Button variant="outline" size="sm" onClick={() => {
+                if (!openAuthenticatedPrintWindow(`/print/ipd-bill/${admission.id}?final=true`)) {
+                  toast({ title: "Allow pop-ups to print", description: "Your browser blocked the final bill. Allow pop-ups and try again.", variant: "error" })
+                }
+              }}><Printer className="h-4 w-4" /> Print final bill</Button>
+            </div>
+            {billLoading && <p role="status" className="mt-2 text-xs text-[var(--cp-ink-soft)]">Loading final bill…</p>}
+            {billError && <p role="alert" className="mt-2 text-xs text-[var(--cp-critical)]">{billError}</p>}
+            {runningBill && (
+              <>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {[
+                    { label: "Bed", items: runningBill.categories.bed },
+                    { label: "Medicines", items: runningBill.categories.medicines },
+                    { label: "Services", items: runningBill.categories.services },
+                    { label: "Tests", items: runningBill.categories.tests },
+                  ].map((category) => (
+                    <div key={category.label} className="rounded-lg bg-[var(--cp-bg)] p-2">
+                      <p className="text-xs text-[var(--cp-ink-soft)]">{category.label}</p>
+                      <p className="cp-tabular text-sm font-semibold">{formatCurrency(category.items.reduce((sum, item) => sum + Number(item.subtotal ?? 0), 0))}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm">
+                  <span>Charged <strong>{formatCurrency(Number(runningBill.totals.charged))}</strong></span>
+                  <span>Paid <strong>{formatCurrency(Number(runningBill.totals.paid))}</strong></span>
+                  <span>Balance <strong>{formatCurrency(Math.max(0, netFinalBalance))}</strong></span>
+                  {netFinalBalance < 0 && <span>Excess deposit <strong>{formatCurrency(Math.abs(netFinalBalance))}</strong></span>}
+                </div>
+                {netFinalBalance !== 0 && (
+                  <div className="mt-4 flex flex-col gap-3 border-t border-[var(--cp-border)] pt-3">
+                    <div>
+                      <Label htmlFor="ipd-settlement-method">Payment / refund method</Label>
+                      <select id="ipd-settlement-method" className="h-10 w-full rounded-lg border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 text-sm sm:max-w-xs" value={settlementMethod} onChange={(event) => setSettlementMethod(event.target.value as ApiPayment["paymentMethod"])}>
+                        {["CASH", "CARD", "BANK_TRANSFER", "MOBILE_WALLET", "ONLINE"].map((method) => <option key={method} value={method}>{method.replaceAll("_", " ")}</option>)}
+                      </select>
+                    </div>
+                    {netFinalBalance < 0 && canRefundDeposit ? (
+                      <div><Label htmlFor="ipd-excess-refund-reason">Refund reason (required)</Label><Textarea id="ipd-excess-refund-reason" value={refundReason} onChange={(event) => setRefundReason(event.target.value)} maxLength={500} required /></div>
+                    ) : netFinalBalance < 0 ? (
+                      <p className="text-xs text-[var(--cp-warning)]">An Admin or Billing Manager must authorize the excess-deposit refund.</p>
+                    ) : null}
+                    {netFinalBalance > 0 || canRefundDeposit ? (
+                      <Button size="sm" className="w-fit" onClick={() => void settleFinalBill()} disabled={settling || billLoading || (netFinalBalance < 0 && !refundReason.trim())}>
+                        {settling ? "Settling…" : netFinalBalance < 0 ? "Refund excess deposit" : "Collect balance and settle"}
+                      </Button>
+                    ) : null}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
           <div className="flex justify-end gap-2 border-t border-[var(--cp-border)] pt-4">
             <Button variant="outline" size="sm" onClick={() => {
               if (!openAuthenticatedPrintWindow(`/print/discharge/${admission.id}`)) {
@@ -110,16 +254,57 @@ export function DischargeModal({ bed, onClose, open, admissionOverride }: { bed:
   return (
     <Modal open={open ?? !!bed} onClose={onClose} title="Discharge Patient" description={`${admission.patientName} — ${admission.bedNumber}, ${admission.ward}`} size="lg">
       <div className="flex flex-col gap-4">
-        {admission.outstandingBalance > 0 && (
+        <section className="rounded-xl border border-[var(--cp-border)] p-4" aria-label="Final bill preview before discharge">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-[var(--cp-ink)]">Final bill preview</p>
+            <Button size="sm" variant="outline" onClick={() => {
+              if (!openAuthenticatedPrintWindow(`/print/ipd-bill/${admission.id}?final=true`)) {
+                toast({ title: "Allow pop-ups to print", description: "Your browser blocked the final bill preview. Allow pop-ups and try again.", variant: "error" })
+              }
+            }}><Printer className="h-4 w-4" /> Preview / print</Button>
+          </div>
+          {billLoading && <p role="status" className="mt-2 text-xs text-[var(--cp-ink-soft)]">Calculating current bed rent and bill…</p>}
+          {billError && <p role="alert" className="mt-2 text-xs text-[var(--cp-critical)]">{billError}</p>}
+          {runningBill && (
+            <>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {[
+                  { title: "Bed", total: runningBill.categories.bed },
+                  { title: "Medicines", total: runningBill.categories.medicines },
+                  { title: "Services", total: runningBill.categories.services },
+                  { title: "Tests", total: runningBill.categories.tests },
+                ].map((category) => <div key={category.title} className="rounded-lg bg-[var(--cp-bg)] p-2"><p className="text-xs text-[var(--cp-ink-soft)]">{category.title}</p><p className="cp-tabular text-sm font-semibold">{formatCurrency(category.total.reduce((sum, line) => sum + Number(line.subtotal ?? 0), 0))}</p></div>)}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm">
+                <span>Charged <strong>{formatCurrency(Number(runningBill.totals.charged))}</strong></span>
+                <span>Paid <strong>{formatCurrency(Number(runningBill.totals.paid))}</strong></span>
+                <span>Balance <strong>{formatCurrency(Number(runningBill.totals.balance))}</strong></span>
+              </div>
+            </>
+          )}
+        </section>
+        {effectiveBalance > 0 && (
           <div className="flex items-start gap-3 rounded-xl border border-[var(--cp-warning)]/30 bg-[var(--cp-warning-light)] p-4">
             <AlertTriangle className="h-5 w-5 shrink-0 text-[var(--cp-warning)]" />
             <div className="flex-1">
-              <p className="text-sm font-semibold text-[var(--cp-ink)]">Outstanding balance: {formatCurrency(admission.outstandingBalance)}</p>
-              <p className="mt-0.5 text-xs text-[var(--cp-ink-soft)]">This patient has an unpaid balance. Settle it in Billing, or override to discharge with balance pending.</p>
-              <label className="mt-2 flex items-center gap-2 text-xs font-medium text-[var(--cp-ink)]">
-                <input type="checkbox" checked={overrideBalance} onChange={(e) => setOverrideBalance(e.target.checked)} className="h-4 w-4 rounded border-[var(--cp-border-strong)]" />
-                Override and discharge with balance pending
-              </label>
+              <p className="text-sm font-semibold text-[var(--cp-ink)]">Outstanding balance: {formatCurrency(effectiveBalance)}</p>
+              {isAdmin ? (
+                <>
+                  <p className="mt-0.5 text-xs text-[var(--cp-ink-soft)]">This patient has an unpaid balance. Settle it in Billing, or provide an administrative override reason.</p>
+                  <label className="mt-2 flex items-center gap-2 text-xs font-medium text-[var(--cp-ink)]">
+                    <input type="checkbox" checked={overrideBalance} onChange={(e) => setOverrideBalance(e.target.checked)} className="h-4 w-4 rounded border-[var(--cp-border-strong)]" />
+                    Override and discharge with balance pending
+                  </label>
+                  {overrideBalance && (
+                    <div className="mt-2">
+                      <Label htmlFor="discharge-override-reason" className="text-xs font-medium text-[var(--cp-critical)]">Administrative Override Reason *</Label>
+                      <input id="discharge-override-reason" type="text" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} placeholder="Mandatory reason for overriding unpaid balance" className="mt-1 w-full rounded-lg border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 py-1.5 text-xs" required />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="mt-0.5 text-xs text-[var(--cp-critical)] font-medium">Unpaid balance remains. Only an administrator can override discharge when unpaid dues remain.</p>
+              )}
             </div>
           </div>
         )}

@@ -235,7 +235,7 @@ export function Modal({
           <button
             onClick={onClose}
             aria-label="Close dialog"
-            className="rounded-lg p-1.5 text-[var(--cp-ink-faint)] hover:bg-[var(--cp-bg)] hover:text-[var(--cp-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-primary)]"
+            className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg p-2 text-[var(--cp-ink-faint)] hover:bg-[var(--cp-bg)] hover:text-[var(--cp-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-primary)]"
           >
             <X className="h-5 w-5" />
           </button>
@@ -257,20 +257,24 @@ export function ConfirmDialog({
   description,
   confirmLabel = "Confirm",
   destructive,
+  confirmDisabled = false,
   requireReason,
   reasonLabel = "Reason",
   reasonPlaceholder = "Add a short reason…",
+  children,
 }: {
   open: boolean
   onClose: () => void
   onConfirm: (reason?: string) => void
   title: string
   description: string
-  confirmLabel?: string
+  confirmLabel?: React.ReactNode
   destructive?: boolean
+  confirmDisabled?: boolean
   requireReason?: boolean
   reasonLabel?: string
   reasonPlaceholder?: string
+  children?: React.ReactNode
 }) {
   const [reason, setReason] = React.useState("")
 
@@ -293,6 +297,7 @@ export function ConfirmDialog({
           )}
           <p className="text-sm text-[var(--cp-ink-soft)]">{description}</p>
         </div>
+        {children}
         {requireReason && (
           <div>
             <label className="mb-1.5 block text-sm font-medium text-[var(--cp-ink)]">{reasonLabel}</label>
@@ -309,7 +314,7 @@ export function ConfirmDialog({
           <Button
             variant={destructive ? "emergency" : "primary"}
             size="sm"
-            disabled={disabled}
+            disabled={disabled || confirmDisabled}
             onClick={() => onConfirm(requireReason ? reason.trim() : undefined)}
           >
             {confirmLabel}

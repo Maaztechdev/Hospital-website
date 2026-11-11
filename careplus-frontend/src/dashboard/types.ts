@@ -36,6 +36,8 @@ export interface Patient {
   mrNumber: string
   name: string
   age: number
+  dob?: string
+  dateOfBirth?: string
   gender: Gender
   phone: string
   email?: string
@@ -44,6 +46,7 @@ export interface Patient {
   bloodGroup: BloodGroup
   allergies: string[]
   emergencyContact: string
+  emergencyContactName?: string
   notes?: string
   registeredAt: string // ISO datetime
   lastVisit?: string
@@ -68,6 +71,8 @@ export interface Appointment {
   token: number
   mrNumber: string
   patientName: string
+  age?: number
+  gender?: Gender
   doctorId: string
   doctorName: string
   department: string
@@ -77,6 +82,7 @@ export interface Appointment {
   status: AppointmentStatus
   priority: Priority
   reason?: string
+  chiefComplaint?: string
   rejectionReason?: string
   createdAt: string
   waitingSince?: string // ISO datetime, set when status becomes Waiting
@@ -84,10 +90,13 @@ export interface Appointment {
 
 export interface Doctor {
   id: string
+  userId?: string
   name: string
   department: string
   designation: string
   slotsPerDay: string[] // e.g. ["09:00","09:20",...]
+  specialization?: string
+  specialty?: string
 }
 
 export type VisitStage =
@@ -115,21 +124,36 @@ export interface TimelineEvent {
 
 export interface VitalSigns {
   bp: string
+  systolic?: string
+  diastolic?: string
   temperature: string
+  temperatureUnit?: "F" | "C"
   pulse: string
   weight: string
   spo2: string
   respiratoryRate: string
+  heightCm?: string
 }
 
 export interface PrescriptionItem {
   id: string
   medicineId?: string
+  medicineName?: string
   medicine: string
-  dosage: string
+  genericName?: string
+  dosage?: string
+  legacyDosage?: string
+  doseAmount?: string | number
+  doseUnit?: string
   route: string
-  frequency: string
-  duration: string
+  frequency?: string
+  legacyFrequency?: string
+  frequencyCode?: string
+  duration?: string
+  legacyDuration?: string
+  durationDays?: number
+  durationValue?: string | number
+  durationUnit?: "days" | "weeks" | "months" | string
   instructions?: string
 }
 
@@ -145,9 +169,11 @@ export interface Consultation {
   chiefComplaint: string
   clinicalNotes: string
   diagnosis: string
+  diagnosisCode?: string
   prescriptions: PrescriptionItem[]
   labRecommendations: string[]
   followUpDate?: string
+  followUpInstructions?: string | null
   referral?: string
   status: "Draft" | "Signed"
   signedAt?: string
@@ -166,7 +192,7 @@ export interface LabOrder {
   priority: Priority
   status: LabOrderStatus
   orderNumber?: string
-  sampleCollectedAt?: string
+  sampleCollectedAt?: string | null
   criticalResult?: boolean
   resultValue?: string
   resultUnit?: string
@@ -203,7 +229,8 @@ export interface StockMovement {
   staff: string
 }
 
-export type InvoiceStatus = "Paid" | "Partial" | "Unpaid" | "Void"
+export type InvoiceStatus = "Paid" | "Partial" | "Refunded" | "Partially Refunded" | "Unpaid" | "Void"
+export type InvoiceDepartment = "RECEPTION" | "LAB" | "PHARMACY" | "ULTRASOUND" | "IPD"
 
 export interface InvoiceLineItem {
   id: string
@@ -216,16 +243,21 @@ export interface InvoiceLineItem {
 
 export interface Payment {
   id: string
+  type?: "PAYMENT" | "REFUND"
   amount: number
   method: "Cash" | "Card" | "Bank Transfer" | "Mobile Wallet" | "Online"
   date: string
   receivedBy?: string
+  referenceNumber?: string
   notes?: string
+  reason?: string
+  reversed?: boolean
 }
 
 export interface Invoice {
   id: string
   invoiceNumber?: string
+  department?: InvoiceDepartment | null
   grandTotal?: number
   paidAmount?: number
   balanceAmount?: number
@@ -273,10 +305,12 @@ export interface Bed {
   patientName?: string
   doctorName?: string
   admittedAt?: string
+  depositPending?: boolean
+  roundDoneToday?: boolean
 }
 
 export type AdmissionStatus = "Admitted" | "Discharged" | "Transferred Out"
-export type AdmissionType = "Emergency" | "Planned" | "Referral"
+export type AdmissionType = "Emergency" | "Planned" | "Referral" | "Transfer" | "Day care"
 
 export interface Admission {
   id: string
@@ -291,6 +325,7 @@ export interface Admission {
   admissionDate: string
   reason: string
   depositAmount: number
+  dailyRate?: number
   notes?: string
   status: AdmissionStatus
   dischargeDate?: string
@@ -314,7 +349,7 @@ export interface TransferRecord {
   by: string
 }
 
-export type OTStatus = "Scheduled" | "Pre-op" | "In Progress" | "Recovery" | "Completed" | "Cancelled"
+export type OTStatus = "Scheduled" | "Pre-op" | "In Progress" | "Recovery" | "Completed" | "Cancelled" | "Postponed"
 
 export interface ChecklistItem {
   id: string
@@ -329,6 +364,17 @@ export interface OTActivityEntry {
   at: string
 }
 
+export interface SurgeryStatusEvent {
+  id: string
+  surgeryId: string
+  fromStatus?: string | null
+  toStatus: string
+  changedBy: string
+  actorName: string
+  reason?: string | null
+  createdAt: string
+}
+
 export interface Surgery {
   id: string
   mrNumber: string
@@ -336,7 +382,10 @@ export interface Surgery {
   procedureName: string
   surgeonId: string
   surgeonName: string
+  assistantSurgeonName?: string
   otRoom: string
+  priority?: "Elective" | "Urgent" | "Emergency"
+  anesthesiaType?: string
   scheduledDate: string // ISO date
   scheduledTime: string // HH:mm
   durationMinutes: number
@@ -344,6 +393,14 @@ export interface Surgery {
   notes?: string
   preOpChecklist: ChecklistItem[]
   activityLog: OTActivityEntry[]
+  intraoperativeNotes?: string | null
+  outcomeNotes?: string | null
+  postOpNotes?: string | null
+  emergencyOverrideReason?: string | null
+  postponeReason?: string | null
+  statusEvents?: SurgeryStatusEvent[]
+  admissionId?: string | null
+  otCharge?: number | null
 }
 
 export type AuditActionType = string

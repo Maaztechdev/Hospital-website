@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { asyncHandler } from "@common/utils/asyncHandler";
 import { sendSuccess, paginationMeta } from "@common/utils/apiResponse";
 import { getPageParams } from "@common/utils/pagination";
-import { UnauthorizedError } from "@common/errors/AppError";
+import { NotFoundError, UnauthorizedError } from "@common/errors/AppError";
 import { appointmentsService, serializeAppointmentDateFields } from "./appointments.service";
 
 async function serializeAppointment<T extends { id: string }>(appointment: T) {
@@ -13,10 +13,10 @@ async function serializeAppointment<T extends { id: string }>(appointment: T) {
 export const appointmentsController = {
   list: asyncHandler(async (req: Request, res: Response) => {
     const page = getPageParams(req);
-    const { date, doctorId, departmentId, status } = req.query as Record<string, string | undefined>;
+    const { date, doctorId, departmentId, status, cursorCreatedAt, cursorId } = req.query as Record<string, string | undefined>;
     const sort = req.query.sort === "recentlyCreated" ? "recentlyCreated" : "date";
     if (!req.user) throw new UnauthorizedError();
-    const { items, total } = await appointmentsService.list(req.user, { ...page, date, doctorId, departmentId, status, sort });
+    const { items, total } = await appointmentsService.list(req.user, { ...page, date, doctorId, departmentId, status, sort, cursorCreatedAt, cursorId });
     sendSuccess(res, 200, { data: await serializeAppointmentDateFields(items), pagination: paginationMeta(page.page, page.limit, total) });
   }),
 
@@ -83,6 +83,7 @@ export const appointmentsController = {
   callNext: asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) throw new UnauthorizedError();
     const appt = await appointmentsService.callNext(req.user, req.params.doctorId, req);
+    if (!appt) throw new NotFoundError("No patients waiting in queue for this doctor");
     sendSuccess(res, 200, { data: await serializeAppointment(appt), message: "Next patient called" });
   }),
 
@@ -90,6 +91,12 @@ export const appointmentsController = {
     if (!req.user) throw new UnauthorizedError();
     const appt = await appointmentsService.startConsultation(req.user, req.params.id, req);
     sendSuccess(res, 200, { data: await serializeAppointment(appt), message: "Consultation started" });
+  }),
+
+  waiveFee: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const result = await appointmentsService.waiveFee(req.user, req.params.id, req.body.reason, req);
+    sendSuccess(res, 200, { data: result, message: "Consultation fee waived" });
   }),
 
   requeue: asyncHandler(async (req: Request, res: Response) => {

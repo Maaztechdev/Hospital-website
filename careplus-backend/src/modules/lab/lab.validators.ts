@@ -9,6 +9,7 @@ const createLabOrderFields = z.object({
   sampleType: z.string().optional(),
   clinicalNotes: z.string().max(1000).optional(),
   consultationId: z.string().uuid().optional(),
+  admissionId: z.string().uuid().optional(),
   discountPercent: z.number().finite().min(0).max(100).optional(),
   discountReason: z.string().trim().max(500).optional(),
   referringClinicAccountId: z.string().uuid().optional(),
@@ -117,6 +118,9 @@ export const enterResultSchema = z.object({
   technicianNotes: z.string().max(1000).optional(),
   reportRemarks: z.string().max(1000).optional(),
   inventoryOverrideReason: z.string().trim().min(1).max(500).optional(),
+  expectedResultId: z.string().optional(),
+  expectedCreatedAt: z.string().optional(),
+  expectedUpdatedAt: z.string().optional(),
 }).superRefine((result, context) => {
   if (!result.parameters?.length && result.resultValue == null) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "Enter values for the test parameters", path: ["parameters"] });
@@ -141,6 +145,7 @@ export const uploadReportSchema = z.object({
 });
 
 export const idParamSchema = z.object({ id: z.string().uuid() });
+export const verifyLabOrderBodySchema = z.object({ expectedUpdatedAt: z.string().optional() }).optional();
 
 export const listLabOrdersQuerySchema = z.object({
   page: z.string().optional(),

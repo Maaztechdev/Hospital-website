@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useParams, useNavigate, Link } from "react-router-dom"
-import { ArrowLeft, User, Stethoscope, DoorOpen, CalendarClock, Clock3, X } from "lucide-react"
+import { ArrowLeft, User, Stethoscope, DoorOpen, CalendarClock, Clock3, X, Bed, Receipt } from "lucide-react"
 import { ConfirmDialog } from "@/dashboard/components/Primitives"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -33,10 +33,11 @@ export default function SurgeryDetail({ surgeryId: suppliedId, onClose }: Props 
   const [complications, setComplications] = React.useState("")
   const [postponeDateTime, setPostponeDateTime] = React.useState("")
   const [postponeReason, setPostponeReason] = React.useState("")
+  const [chargeAmount, setChargeAmount] = React.useState("")
 
   async function refresh(updated: { id: string }) {
     const detail = await api.getSurgery(updated.id)
-    dispatch({ type: "SET_SURGERIES", surgeries: surgeries.map((item) => item.id === updated.id ? { ...toSurgery(detail), mrNumber: item.mrNumber } : item) })
+    dispatch({ type: "UPSERT_SURGERY", surgery: toSurgery(detail) })
   }
 
   async function runAction(action: () => Promise<{ id: string }>, success: string) {
@@ -99,7 +100,14 @@ export default function SurgeryDetail({ surgeryId: suppliedId, onClose }: Props 
       <div className="rounded-2xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-5 cp-shadow">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><p className="text-lg font-bold text-[var(--cp-ink)]">{surgery.procedureName}</p><p className="text-sm text-[var(--cp-ink-soft)]">{surgery.patientName} · {surgery.mrNumber}</p></div>
-          <span className={cn("rounded-full px-3 py-1 text-xs font-bold", meta.bg, meta.tone)}>{surgery.status}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {surgery.admissionId && (
+              <span className="rounded-full bg-[var(--cp-primary-light)] px-2.5 py-1 text-xs font-semibold text-[var(--cp-primary)]">
+                IPD Admission
+              </span>
+            )}
+            <span className={cn("rounded-full px-3 py-1 text-xs font-bold", meta.bg, meta.tone)}>{surgery.status}</span>
+          </div>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]"><Stethoscope className="h-4 w-4 text-[var(--cp-ink-faint)]" /> {surgery.surgeonName}</div>
@@ -107,6 +115,20 @@ export default function SurgeryDetail({ surgeryId: suppliedId, onClose }: Props 
           <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]"><DoorOpen className="h-4 w-4 text-[var(--cp-ink-faint)]" /> {surgery.otRoom}</div>
           <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]"><CalendarClock className="h-4 w-4 text-[var(--cp-ink-faint)]" /> {surgery.scheduledDate}</div>
           <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]"><Clock3 className="h-4 w-4 text-[var(--cp-ink-faint)]" /> {surgery.scheduledTime} · {surgery.durationMinutes} min</div>
+          {surgery.admissionId && (
+            <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]">
+              <Bed className="h-4 w-4 text-[var(--cp-ink-faint)]" />
+              <Link to={`/dashboard/ipd/admissions/${surgery.admissionId}`} className="font-semibold text-[var(--cp-primary)] hover:underline">
+                Admission #{surgery.admissionId.slice(0, 8)}
+              </Link>
+            </div>
+          )}
+          {typeof surgery.otCharge === "number" && (
+            <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]">
+              <Receipt className="h-4 w-4 text-[var(--cp-success)]" />
+              <span className="font-semibold text-[var(--cp-success)]">OT Charge: Rs. {surgery.otCharge.toLocaleString()}</span>
+            </div>
+          )}
         </div>
         <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold text-[var(--cp-ink-soft)]">{surgery.priority && <span>{surgery.priority} priority</span>}{surgery.anesthesiaType && <span>{surgery.anesthesiaType} anesthesia</span>}</div>
         {surgery.notes && <p className="mt-3 rounded-lg bg-[var(--cp-surface-warm)] p-3 text-sm text-[var(--cp-ink-soft)]">{surgery.notes}</p>}
@@ -163,7 +185,37 @@ export default function SurgeryDetail({ surgeryId: suppliedId, onClose }: Props 
         <div className="grid gap-3"><label className="text-xs font-semibold">New date and time (Asia/Karachi)<input type="datetime-local" value={postponeDateTime} onChange={(event) => setPostponeDateTime(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 py-2 text-sm" /></label><label className="text-xs font-semibold">Reason<Textarea value={postponeReason} onChange={(event) => setPostponeReason(event.target.value)} /></label></div>
       </ConfirmDialog>
       <ConfirmDialog open={recoveryOpen} onClose={() => { if (!busy) setRecoveryOpen(false) }} onConfirm={() => void runAction(() => api.moveSurgeryToRecovery(surgery.id, { intraoperativeNotes, outcomeNotes }), "Moved to recovery")} title="Move to Recovery" description="Record the required intra-operative and outcome notes." confirmLabel={busy ? "Saving…" : "Move to Recovery"} confirmDisabled={busy || !intraoperativeNotes.trim() || !outcomeNotes.trim()} />
-      <ConfirmDialog open={completeOpen} onClose={() => { if (!busy) setCompleteOpen(false) }} onConfirm={() => void runAction(() => api.completeSurgery(surgery.id, { postOpNotes, complications }), "Surgery completed")} title="Complete Surgery" description="Post-op notes are required before completing this surgery." confirmLabel={busy ? "Completing…" : "Complete"} confirmDisabled={busy || !postOpNotes.trim()} />
+      <ConfirmDialog
+        open={completeOpen}
+        onClose={() => { if (!busy) setCompleteOpen(false) }}
+        onConfirm={() => void runAction(() => api.completeSurgery(surgery.id, {
+          postOpNotes,
+          complications,
+          chargeAmount: chargeAmount.trim() ? Number(chargeAmount) : undefined,
+        }), "Surgery completed")}
+        title="Complete Surgery"
+        description="Post-op notes are required before completing this surgery."
+        confirmLabel={busy ? "Completing…" : "Complete"}
+        confirmDisabled={busy || !postOpNotes.trim()}
+      >
+        <div className="grid gap-3">
+          <label className="text-xs font-semibold">Post-op notes (required)<Textarea value={postOpNotes} onChange={(event) => setPostOpNotes(event.target.value)} /></label>
+          <label className="text-xs font-semibold">Complications (optional)<Textarea value={complications} onChange={(event) => setComplications(event.target.value)} /></label>
+          {surgery.admissionId && (
+            <label className="text-xs font-semibold">
+              OT Charge Amount (Rs., optional override)
+              <input
+                type="number"
+                min="0"
+                value={chargeAmount}
+                onChange={(event) => setChargeAmount(event.target.value)}
+                placeholder="Leave blank for standard charge or no-charge"
+                className="mt-1 w-full rounded-lg border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 py-2 text-sm"
+              />
+            </label>
+          )}
+        </div>
+      </ConfirmDialog>
     </div>
   )
 

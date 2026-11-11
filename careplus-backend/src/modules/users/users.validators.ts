@@ -1,15 +1,12 @@
 import { z } from "zod";
 import { Role } from "@prisma/client";
+import { passwordPolicySchema } from "../../common/validators/passwordPolicy";
 
 export const createUserSchema = z.object({
   name: z.string().min(2).max(120),
   email: z.string().email(),
   phone: z.string().min(7).max(20).optional(),
-  password: z
-    .string()
-    .min(8)
-    .regex(/[A-Z]/, "Password must contain an uppercase letter")
-    .regex(/[0-9]/, "Password must contain a number"),
+  password: passwordPolicySchema,
   role: z.nativeEnum(Role),
   departmentId: z.string().uuid().optional(),
 });

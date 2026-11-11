@@ -1,4 +1,4 @@
-import { PrismaClient, AppointmentStatus } from "@prisma/client";
+import { PrismaClient, AppointmentStatus, Gender } from "@prisma/client";
 import { generateNextAppointmentToken } from "../src/common/utils/sequenceGenerators";
 
 const prisma = new PrismaClient();
@@ -50,6 +50,7 @@ async function createDemoAppointment(input: {
   departmentId: string | null;
   createdBy: string;
   approvedBy: string;
+  gender: Gender;
   scheduleJson: unknown;
   status: AppointmentStatus;
 }) {
@@ -80,10 +81,10 @@ async function createDemoAppointment(input: {
       const tokenNumber = await generateNextAppointmentToken(tx, input.doctorId, dateKey);
       const [appointment] = await tx.$queryRaw<Array<{ id: string; status: string; timeSlot: string }>>`
         INSERT INTO appointments (
-          patient_id, doctor_id, department_id, appointment_date, time_slot, token_number,
+          patient_id, doctor_id, department_id, appointment_date, time_slot, token_number, gender,
           appointment_type, status, priority, source, reason, notes, is_test, created_by, approved_by, waiting_since, created_at, updated_at
         ) VALUES (
-          ${input.patientId}, ${input.doctorId}, ${input.departmentId}, ${dateKey}::date, ${timeSlot}::time, ${tokenNumber},
+          ${input.patientId}, ${input.doctorId}, ${input.departmentId}, ${dateKey}::date, ${timeSlot}::time, ${tokenNumber}, ${input.gender}::"Gender",
           'CONSULTATION'::"AppointmentType", ${input.status}::"AppointmentStatus", 'ROUTINE'::"Priority", 'WALK_IN'::"AppointmentSource",
           'Demo presentation consultation', 'Synthetic presentation data; safe to identify with is_test.', true,
           ${input.createdBy}, ${input.status === "CONFIRMED" ? input.approvedBy : null}, ${input.status === "WAITING" ? new Date() : null}, NOW(), NOW()
@@ -102,6 +103,10 @@ async function createDemoAppointment(input: {
 }
 
 async function main() {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_PRODUCTION_SEED !== "true") {
+    console.error("❌ Refusing to run demo presentation seed in production (NODE_ENV=production).");
+    throw new Error("Demo presentation seed must not be run in production environment without ALLOW_PRODUCTION_SEED=true");
+  }
   const [admin, doctor] = await Promise.all([
     prisma.user.findFirst({ where: { role: "ADMIN", isActive: true }, orderBy: { createdAt: "asc" } }),
     prisma.doctor.findFirst({ where: { isAvailable: true }, orderBy: { createdAt: "asc" }, include: { user: true } }),
@@ -132,6 +137,7 @@ async function main() {
       departmentId: doctor.departmentId,
       createdBy: admin.id,
       approvedBy: admin.id,
+      gender: patient.gender,
       scheduleJson: doctor.scheduleJson,
       status: DEMO_STATUSES[index],
     });

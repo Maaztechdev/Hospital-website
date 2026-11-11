@@ -9,6 +9,7 @@ import {
   loginSchema,
   refreshSchema,
   resetPasswordSchema,
+  verifyResetTokenSchema,
 } from "./auth.validators";
 
 const router = Router();
@@ -57,6 +58,32 @@ router.post(
   validate({ body: forgotPasswordSchema }),
   authController.forgotPassword
 );
+
+/**
+ * @openapi
+ * /auth/verify-reset-token:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Verify whether a reset token is valid and unexpired
+ *     security: []
+ *     parameters:
+ *       - in: query
+ *         name: token
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Token is valid }
+ *       401: { description: Invalid or expired token }
+ *   post:
+ *     tags: [Auth]
+ *     summary: Verify whether a reset token is valid and unexpired
+ *     security: []
+ *     responses:
+ *       200: { description: Token is valid }
+ *       401: { description: Invalid or expired token }
+ */
+router.get("/verify-reset-token", validate({ query: verifyResetTokenSchema }), authController.verifyResetToken);
+router.post("/verify-reset-token", validate({ body: verifyResetTokenSchema }), authController.verifyResetToken);
 
 /**
  * @openapi

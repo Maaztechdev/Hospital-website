@@ -27,6 +27,7 @@ import pharmacyRoutes from "@modules/pharmacy/pharmacy.routes";
 import billingRoutes from "@modules/billing/billing.routes";
 import wardsRoutes from "@modules/wards/wards.routes";
 import { doctorWardRoundRoutes, wardRoundRoutes } from "@modules/wards/wardRounds.routes";
+import realtimeRoutes from "@modules/realtime/realtime.routes";
 import nursingRoutes from "@modules/nursing/nursing.routes";
 import otRoutes from "@modules/ot/ot.routes";
 import notificationsRoutes from "@modules/notifications/notifications.routes";
@@ -60,17 +61,17 @@ export function createApp(): Express {
         const allowedOrigins = new Set(
           env.NODE_ENV === "production"
             ? [env.FRONTEND_URL]
-            : [env.FRONTEND_URL, "http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"]
+            : [env.FRONTEND_URL, "http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174", "http://localhost:5180", "http://127.0.0.1:5180"]
         );
 
         if (!origin || allowedOrigins.has(origin)) {
-          callback(null, true);
+          callback(null, origin || true);
           return;
         }
 
         callback(new Error(`Origin ${origin} not allowed by CORS`));
       },
-      credentials: false,
+      credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
     })
@@ -78,6 +79,21 @@ export function createApp(): Express {
   app.use(compression());
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: true }));
+  app.use((req, _res, next) => {
+    const cookieHeader = req.headers.cookie;
+    (req as any).cookies = {};
+    if (cookieHeader) {
+      cookieHeader.split(";").forEach((pair) => {
+        const idx = pair.indexOf("=");
+        if (idx > -1) {
+          const key = pair.slice(0, idx).trim();
+          const val = pair.slice(idx + 1).trim();
+          (req as any).cookies[key] = decodeURIComponent(val);
+        }
+      });
+    }
+    next();
+  });
   if (env.NODE_ENV !== "test") app.use(globalApiRateLimiter);
 
   // ── Health check (unauthenticated, excluded from rate limit consideration) ──
@@ -85,7 +101,7 @@ export function createApp(): Express {
     try {
       await prisma.$queryRaw`SELECT 1`;
       res.status(200).json({ success: true, data: { status: "ok", database: "ok", timestamp: new Date().toISOString() }, requestId: req.id });
-    } catch (error) {
+    } catch (_error) {
       next(new ServiceUnavailableError("Database unavailable"));
     }
   });
@@ -114,6 +130,7 @@ export function createApp(): Express {
   router.use("/nursing", nursingRoutes);
   router.use("/ot", otRoutes);
   router.use("/notifications", notificationsRoutes);
+  router.use("/events", realtimeRoutes);
   router.use("/reports", reportsRoutes);
   router.use("/settings", settingsRoutes);
   router.use("/audit-logs", auditLogsRoutes);

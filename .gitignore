@@ -1,0 +1,46 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Dependencies
+node_modules/
+package-lock.json.bak
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+
+# Logs
+*.log
+logs/
+
+qa-evidence/
+
+test-results/
+playwright-report/
+
+# Local backups and uploads
+backups/
+uploads/
+prisma/backups/
+
+# System and IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+OVERNIGHT_REPORT.md
+overnight/
+scratch/
+*.dump
+playwright-final.*
+jest-final.json
+

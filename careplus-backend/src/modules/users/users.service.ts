@@ -3,8 +3,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@config/prisma";
 import { BadRequestError, ConflictError, NotFoundError } from "@common/errors/AppError";
 import { writeAuditLog } from "@common/utils/auditLog";
+import { Request } from "express";
 import { PageParams } from "@common/utils/pagination";
 import { savePrivateUpload } from "@common/utils/privateFiles";
+import { clearFailedLogins } from "@modules/auth/token.utils";
+import { resetLoginRateLimits } from "@common/middleware/rateLimiter";
 import { validateStaffProfileForRole, staffProfileSchema } from "./users.validators";
 
 const safeSelect = {
@@ -202,5 +205,25 @@ export const usersService = {
       newValues: { isActive: false },
     });
     return updated;
+  },
+
+  async unlock(actorId: string, id: string, req?: Request) {
+    const user = await prisma.user.findFirst({ where: { id, deletedAt: null } });
+    if (!user) throw new NotFoundError("User not found");
+
+    await clearFailedLogins(user.email.toLowerCase());
+    resetLoginRateLimits(user.email);
+
+    await writeAuditLog({
+      userId: actorId,
+      action: "STATUS_CHANGE",
+      module: "users",
+      entityType: "User",
+      entityId: id,
+      newValues: { status: "UNLOCKED", unlockedBy: actorId },
+      req,
+    });
+
+    return { message: `Account for ${user.email} unlocked successfully.` };
   },
 };

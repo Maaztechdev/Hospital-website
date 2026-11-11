@@ -1,11 +1,20 @@
 import type { Role } from "@/dashboard/types"
+import type { ApiRolePermission } from "@/lib/api"
 
 export type PermissionAction = "view" | "create" | "edit" | "delete" | "export"
-export type PermissionModule = "patients" | "appointments" | "ward" | "pharmacy" | "lab" | "billing" | "queue"
+export type PermissionModule =
+  | "patients"
+  | "appointments"
+  | "ward"
+  | "pharmacy"
+  | "lab"
+  | "billing"
+  | "queue"
+  | "reports"
 
 const permissions: Record<PermissionModule, Record<PermissionAction, Role[]>> = {
   patients: {
-    view: ["admin", "receptionist", "doctor", "lab_technician", "pharmacist", "nurse", "ultrasound_tech", "ultrasound_technician", "radiologist"],
+    view: ["admin", "billing_manager", "receptionist", "doctor", "lab_technician", "pharmacist", "nurse", "ultrasound_tech", "ultrasound_technician", "radiologist"],
     create: ["admin", "receptionist"], edit: ["admin", "receptionist"], delete: ["admin"], export: ["admin", "receptionist"],
   },
   appointments: {
@@ -26,10 +35,57 @@ const permissions: Record<PermissionModule, Record<PermissionAction, Role[]>> = 
   queue: {
     view: ["admin", "receptionist", "doctor", "nurse"], create: ["admin", "receptionist", "doctor", "nurse"], edit: ["admin", "receptionist", "doctor", "nurse"], delete: ["admin"], export: ["admin", "receptionist"],
   },
+  reports: {
+    view: ["admin"], create: ["admin"], edit: ["admin"], delete: ["admin"], export: ["admin"],
+  },
+}
+
+const STORAGE_KEY = "careplus_stored_role_permissions"
+
+let storedRolePermissions: ApiRolePermission[] = (() => {
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+})()
+
+export function setStoredPermissions(items: ApiRolePermission[]): void {
+  storedRolePermissions = items
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items))
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getStoredPermissions(): ApiRolePermission[] {
+  return storedRolePermissions
 }
 
 export function can(role: Role, module: PermissionModule, action: PermissionAction): boolean {
-  return permissions[module][action].includes(role)
+  const normalizedRole = role.toLowerCase()
+
+  // Safeguard: Admin role always has full access
+  if (normalizedRole === "admin") return true
+
+  // Evaluate stored permissions if available
+  if (storedRolePermissions && storedRolePermissions.length > 0) {
+    const entry = storedRolePermissions.find(
+      (p) =>
+        p.role.toLowerCase() === normalizedRole &&
+        p.module.toLowerCase() === module.toLowerCase()
+    )
+    if (entry) {
+      return entry.allowedActions.includes(action)
+    }
+  }
+
+  // Fall back to hard-coded baseline defaults
+  return permissions[module]?.[action]?.includes(normalizedRole as Role) ?? false
 }
 
 export { permissions }

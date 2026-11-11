@@ -5,6 +5,7 @@ import { prisma } from "@config/prisma";
 import { redis } from "@config/redis";
 import { signAccessToken } from "../../src/modules/auth/token.utils";
 import { patientsService } from "../../src/modules/patients/patients.service";
+import { generateLabOrderNumber } from "../../src/common/utils/sequenceGenerators";
 
 describe("Patient clinical summary", () => {
   afterAll(() => {
@@ -85,6 +86,7 @@ describe("Patient clinical summary", () => {
             timeSlot: new Date(`1970-01-01T${String(9 + index).padStart(2, "0")}:00:00.000Z`),
             tokenNumber: index + 1,
             appointmentType: "CONSULTATION",
+            gender: patient.gender,
             status: "COMPLETED",
             source: "WALK_IN",
             createdBy: admin.id,
@@ -133,6 +135,7 @@ describe("Patient clinical summary", () => {
       }
       const labOrder = await prisma.labOrder.create({
         data: {
+          orderNumber: await generateLabOrderNumber(prisma),
           patientId: patient.id,
           doctorId: doctor.id,
           testId: test.id,
@@ -143,7 +146,7 @@ describe("Patient clinical summary", () => {
       });
       labOrderIds.push(labOrder.id);
       const ultrasound = await prisma.ultrasoundOrder.create({
-        data: { patientId: patient.id, doctorId: doctor.id, examType: "KUB", status: "COMPLETED", completedAt: new Date() },
+        data: { patientId: patient.id, doctorId: doctor.id, examType: "KUB", status: "REPORTED", completedAt: new Date() },
       });
       ultrasoundOrderIds.push(ultrasound.id);
       const unrelatedAppointment = await prisma.appointment.create({
@@ -154,6 +157,7 @@ describe("Patient clinical summary", () => {
           timeSlot: new Date("1970-01-01T13:00:00.000Z"),
           tokenNumber: 1,
           appointmentType: "CONSULTATION",
+          gender: unrelatedPatient.gender,
           status: "COMPLETED",
           source: "WALK_IN",
           createdBy: admin.id,
@@ -176,7 +180,7 @@ describe("Patient clinical summary", () => {
       expect(summary.previouslyPrescribedMedicines).toHaveLength(2);
       expect(summary.vitals[0]).toMatchObject({ pulse: 72, weight: 62, isCritical: true });
       expect(summary.labResults[0]).toMatchObject({ test: `Clinical CBC ${suffix}`, result: "8.2 g/dL", flag: "LOW" });
-      expect(summary.ultrasounds[0]).toMatchObject({ type: "KUB", status: "COMPLETED" });
+      expect(summary.ultrasounds[0]).toMatchObject({ type: "KUB", status: "REPORTED" });
       expect(summary.hasCriticalVitals).toBe(true);
       expect(summary.hasAbnormalLab).toBe(true);
       await expect(patientsService.getClinicalSummary(actor, unrelatedPatient.id)).rejects.toThrow("not authorized");

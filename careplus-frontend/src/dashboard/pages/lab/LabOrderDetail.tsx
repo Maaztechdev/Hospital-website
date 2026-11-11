@@ -1,6 +1,6 @@
 import * as React from "react"
-import { useParams } from "react-router-dom"
-import { Check, AlertOctagon, Download, Printer, Upload, ShieldCheck } from "lucide-react"
+import { useNavigate, useParams } from "react-router-dom"
+import { Check, AlertOctagon, Download, Printer, Upload, ShieldCheck, User, CreditCard, Receipt, Ban, Wallet, ExternalLink } from "lucide-react"
 import QRCode from "qrcode"
 import { DashboardPageHeader, NotPermitted } from "@/dashboard/components/Layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -9,14 +9,16 @@ import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
+import { Modal, ConfirmDialog } from "@/dashboard/components/Primitives"
 import { StatusBadge } from "@/dashboard/components/StatusBadge"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
 import type { LabInterpretation, LabOrderStatus } from "@/dashboard/types"
 import type { ApiLabSampleRejectionReason } from "@/lib/api"
-import { formatDate, formatDateTime } from "@/dashboard/lib/format"
+import { formatCurrency, formatDate, formatDateTime } from "@/dashboard/lib/format"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
-import { api, apiAssetUrl, describeApiError, getAccessToken, toLabOrder, type ApiLabOrder, type ApiLabParameterInterpretation, type ApiLabReferenceRange, type ApiLabReportSettings, type ApiLabResultInput, type ApiLabTestParameter } from "@/lib/api"
+import { api, apiAssetUrl, API_BASE_URL, describeApiError, getAccessToken, toLabOrder, type ApiLabOrder, type ApiLabParameterInterpretation, type ApiLabReferenceRange, type ApiLabReportSettings, type ApiLabResultInput, type ApiLabTestParameter } from "@/lib/api"
+import { printElement } from "@/lib/print"
 
 const STEPS: LabOrderStatus[] = ["Ordered", "Sample Collected", "Processing", "Completed", "Verified"]
 type ParameterDraft = { parameterId: string; value: string; overriddenInterpretation: ApiLabParameterInterpretation | ""; overrideReason: string; valueError?: string; overrideError?: string }
@@ -114,7 +116,7 @@ function abnormalFlag(computed?: ApiLabParameterInterpretation | null, effective
 async function loadReportImageData(url?: string | null) {
   if (!url) return null
   const assetUrl = new URL(apiAssetUrl(url), window.location.origin)
-  const apiOrigin = new URL(import.meta.env.VITE_API_URL ?? "http://localhost:4000/api/v1", window.location.origin).origin
+  const apiOrigin = new URL(API_BASE_URL, window.location.origin).origin
   const token = getAccessToken()
   const headers = token && assetUrl.origin === apiOrigin ? { Authorization: `Bearer ${token}` } : undefined
   const response = await fetch(assetUrl, { headers })
@@ -134,6 +136,7 @@ async function loadReportImageData(url?: string | null) {
 }
 
 export default function LabOrderDetail() {
+  const navigate = useNavigate()
   const { orderId } = useParams()
   const { toast } = useToast()
   const { labOrders, patients, dispatch, currentUser } = useDashboard()
@@ -162,6 +165,13 @@ export default function LabOrderDetail() {
   const [rejectionReason, setRejectionReason] = React.useState<ApiLabSampleRejectionReason>("HAEMOLYSED")
   const [otherRejectionReason, setOtherRejectionReason] = React.useState("")
   const [workingAction, setWorkingAction] = React.useState(false)
+  const [paymentModalOpen, setPaymentModalOpen] = React.useState(false)
+  const [paymentAmount, setPaymentAmount] = React.useState("")
+  const [paymentMethod, setPaymentMethod] = React.useState<"CASH" | "CARD" | "BANK_TRANSFER" | "MOBILE_WALLET" | "ONLINE">("CASH")
+  const [paymentNotes, setPaymentNotes] = React.useState("")
+  const [voidModalOpen, setVoidModalOpen] = React.useState(false)
+  const [voidReason, setVoidReason] = React.useState("")
+  const [billingBusy, setBillingBusy] = React.useState(false)
   const reportReady = Boolean(order?.resultValue || order?.status === "Completed" || order?.status === "Verified")
 
   React.useEffect(() => {
@@ -223,6 +233,8 @@ export default function LabOrderDetail() {
   const canVerify = currentUser?.role === "admin" || currentUser?.role === "pathologist"
   const canAmend = canVerify
   const canProcessSamples = currentUser?.role === "admin" || currentUser?.role === "lab_technician"
+  const canVoidInvoice = ["admin", "billing_manager"].includes(currentUser?.role ?? "")
+  const canReceivePayment = ["admin", "billing_manager", "receptionist", "lab_technician"].includes(currentUser?.role ?? "")
   const openRejection = orderDetail?.sampleRejections?.filter((rejection) => !rejection.recollectedAt).at(-1)
   const ageGenderNote = [
     !orderDetail?.patient?.gender || orderDetail.patient.gender === "OTHER"
@@ -266,6 +278,71 @@ export default function LabOrderDetail() {
     }
   }
 
+  async function generateBill() {
+    setBillingBusy(true)
+    try {
+      await api.generateLabOrderInvoice(order!.id)
+      await refreshOrder()
+      toast({ title: "Invoice generated", description: "Official billing invoice generated and linked to lab order.", variant: "success" })
+    } catch (cause) {
+      toast({ title: "Unable to generate bill", description: describeApiError(cause), variant: "error" })
+    } finally {
+      setBillingBusy(false)
+    }
+  }
+
+  async function handleRecordPayment() {
+    const n = Number(paymentAmount)
+    const invoice = orderDetail?.invoice
+    const balance = Number(invoice?.balanceAmount ?? 0)
+    if (!n || n <= 0) {
+      toast({ title: "Invalid amount", description: "Enter a payment amount greater than zero.", variant: "error" })
+      return
+    }
+    if (n > balance) {
+      toast({ title: "Amount exceeds balance", description: `Cannot pay more than the outstanding balance of ${formatCurrency(balance)}.`, variant: "error" })
+      return
+    }
+    setBillingBusy(true)
+    try {
+      await api.recordPayment(invoice!.id, {
+        amount: n,
+        paymentMethod: paymentMethod as never,
+        notes: paymentNotes.trim() || undefined,
+      })
+      await refreshOrder()
+      setPaymentModalOpen(false)
+      setPaymentAmount("")
+      setPaymentNotes("")
+      toast({ title: "Payment recorded", description: `${formatCurrency(n)} received via ${paymentMethod.replace(/_/g, " ")}.`, variant: "success" })
+    } catch (cause) {
+      toast({ title: "Payment failed", description: describeApiError(cause), variant: "error" })
+    } finally {
+      setBillingBusy(false)
+    }
+  }
+
+  async function handleVoidInvoice(reason?: string) {
+    const r = reason || voidReason
+    if (!r.trim()) {
+      toast({ title: "Void reason required", description: "Enter a reason to cancel/void this invoice.", variant: "error" })
+      return
+    }
+    const invoice = orderDetail?.invoice
+    setBillingBusy(true)
+    try {
+      await api.voidInvoice(invoice!.id, r.trim())
+      await refreshOrder()
+      setVoidModalOpen(false)
+      setVoidReason("")
+      toast({ title: "Invoice voided", description: "Invoice marked void and balance cleared.", variant: "info" })
+    } catch (cause) {
+      toast({ title: "Unable to void invoice", description: describeApiError(cause), variant: "error" })
+    } finally {
+      setBillingBusy(false)
+    }
+  }
+
   async function saveResult() {
     if (!reportSettings) {
       toast({ title: "Lab settings are not loaded", description: "Reload the order before saving or printing its report.", variant: "error" })
@@ -295,12 +372,13 @@ export default function LabOrderDetail() {
     }
     setSavingResult(true)
     try {
+      const expectedUpdatedAt = latestResult ? (latestResult.amendedAt || latestResult.createdAt) : undefined
       let payload: ApiLabResultInput = parameters.length
         ? { parameters: parameterDrafts.map(({ parameterId, value, overriddenInterpretation, overrideReason }) => ({
           parameterId, value,
           ...(overriddenInterpretation ? { overriddenInterpretation, overrideReason: overrideReason.trim() } : {}),
-        })), technicianNotes: notes, reportRemarks }
-        : { resultValue, unit, referenceRange: range, interpretation: interpretation.toUpperCase() as "NORMAL" | "HIGH" | "LOW" | "CRITICAL", technicianNotes: notes, reportRemarks }
+        })), technicianNotes: notes, reportRemarks, expectedUpdatedAt }
+        : { resultValue, unit, referenceRange: range, interpretation: interpretation.toUpperCase() as "NORMAL" | "HIGH" | "LOW" | "CRITICAL", technicianNotes: notes, reportRemarks, expectedUpdatedAt }
       if (order!.status === "Verified") await api.amendLabResult(order!.id, { ...payload, reason: amendReason.trim() })
       else {
         try {
@@ -318,20 +396,58 @@ export default function LabOrderDetail() {
       setAmendReason("")
       toast({ title: order!.status === "Verified" ? "Report amended" : "Result version saved", description: "Previous saved result versions remain in the order history.", variant: "success" })
     } catch (cause) {
-      toast({ title: "Unable to save result", description: describeApiError(cause), variant: "error" })
+      const err = cause as { status?: number; message?: string }
+      if (err?.status === 409 || err?.message?.toLowerCase().includes("changed by another user")) {
+        toast({ title: "Conflict Detected", description: "this record was changed by another user, reload", variant: "error" })
+      } else {
+        toast({ title: "Unable to save result", description: describeApiError(cause), variant: "error" })
+      }
     } finally {
       setSavingResult(false)
     }
   }
 
   async function verify() {
+    const parameters = orderDetail?.test?.parameters ?? []
+    if (parameters.length > 0) {
+      const missingParam = parameters.find((param) => {
+        const draft = parameterDrafts.find((d) => d.parameterId === param.id)
+        const saved = savedParameterRows.find((p) => p.parameterId === param.id)
+        const val = (draft?.value ?? saved?.value ?? "").trim()
+        return !val
+      })
+      if (missingParam) {
+        toast({
+          title: "Missing required parameter",
+          description: `Cannot finalize: parameter "${missingParam.name}" is required and cannot be blank.`,
+          variant: "error",
+        })
+        return
+      }
+    } else {
+      const val = (resultValue || latestResult?.resultValue || "").trim()
+      if (!val) {
+        toast({
+          title: "Missing result value",
+          description: "Cannot finalize: result value is required and cannot be blank.",
+          variant: "error",
+        })
+        return
+      }
+    }
+
     setSavingResult(true)
     try {
-      await api.verifyLabOrder(order!.id)
+      await api.verifyLabOrder(order!.id, latestResult ? (latestResult.amendedAt || latestResult.createdAt) : undefined)
       await refreshOrder()
       toast({ title: "Result verified", description: "Report is now finalized and locked.", variant: "success" })
     } catch (cause) {
-      toast({ title: "Unable to verify result", description: describeApiError(cause), variant: "error" })
+      const err = cause as { status?: number; message?: string }
+      if (err?.status === 409 || err?.message?.toLowerCase().includes("changed by another user")) {
+        toast({ title: "Conflict Detected", description: "this record was changed by another user, reload", variant: "error" })
+      } else {
+        toast({ title: "Unable to verify result", description: describeApiError(cause), variant: "error" })
+      }
     } finally {
       setSavingResult(false)
     }
@@ -379,9 +495,7 @@ export default function LabOrderDetail() {
     try {
       await api.recordLabPrint(order!.id)
       await refreshOrder()
-      setActiveTab("order")
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-      window.print()
+      await printElement("lab-report-print", { title: `LabReport-${order!.orderNumber}` })
     } catch (cause) {
       toast({ title: "Unable to record report print", description: describeApiError(cause), variant: "error" })
     }
@@ -805,7 +919,12 @@ export default function LabOrderDetail() {
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-bold text-[var(--cp-ink)]">{order.testName}</p>
-              <p className="text-xs text-[var(--cp-ink-soft)]">{order.patientName} · {order.mrNumber} · Ordered by {order.doctorName} · {formatDate(order.orderDate)}</p>
+              <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                <p className="text-xs text-[var(--cp-ink-soft)]">{order.patientName} · {order.mrNumber} · Ordered by {order.doctorName} · {formatDate(order.orderDate)}</p>
+                <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => navigate(`/dashboard/patients/${encodeURIComponent(order.mrNumber)}`)}>
+                  <User className="h-3 w-3 mr-1" /> Open Patient Record
+                </Button>
+              </div>
             </div>
             <StatusBadge status={order.priority} />
           </div>
@@ -850,6 +969,163 @@ export default function LabOrderDetail() {
             {rejectionReason === "OTHER" && <div><Label htmlFor="other-rejection-reason">Describe reason *</Label><Input id="other-rejection-reason" autoComplete="off" value={otherRejectionReason} onChange={(event) => setOtherRejectionReason(event.target.value)} /></div>}
             <div className="flex items-end gap-2"><Button size="sm" disabled={workingAction} onClick={() => void rejectSample()}>{workingAction ? "Saving…" : "Confirm Rejection"}</Button><Button size="sm" variant="outline" onClick={() => setShowRejectForm(false)}>Cancel</Button></div>
           </div>}
+        </CardContent>
+      </Card>
+
+      {/* Lab Billing & Invoicing Section */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <div className="flex items-center gap-2">
+            <Receipt className="h-5 w-5 text-[var(--cp-primary)]" />
+            <CardTitle className="text-base font-semibold">Billing & Payments</CardTitle>
+          </div>
+          {orderDetail?.invoice ? (
+            <div className="flex items-center gap-2">
+              <span className="cp-tabular text-xs font-semibold text-[var(--cp-ink-soft)]">
+                {orderDetail.invoice.invoiceNumber}
+              </span>
+              <StatusBadge status={orderDetail.invoice.status} />
+            </div>
+          ) : (
+            <span className="text-xs text-[var(--cp-ink-soft)] font-medium">Unbilled</span>
+          )}
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!orderDetail?.invoice ? (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-dashed border-[var(--cp-border)] p-4 bg-[var(--cp-bg,#f8fafc)]">
+              <div>
+                <p className="text-sm font-medium text-[var(--cp-ink)]">No invoice generated yet for this order</p>
+                <p className="text-xs text-[var(--cp-ink-soft)] mt-0.5">Generate a bill linked to this patient and order to record payment.</p>
+              </div>
+              <Button size="sm" onClick={() => void generateBill()} disabled={billingBusy}>
+                <CreditCard className="h-4 w-4 mr-1.5" />
+                {billingBusy ? "Generating…" : "Generate Bill"}
+              </Button>
+            </div>
+          ) : (
+            <>
+              {/* Financial Breakdown */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-3">
+                <div>
+                  <span className="text-[11px] font-medium text-[var(--cp-ink-soft)]">Subtotal</span>
+                  <p className="cp-tabular text-sm font-semibold text-[var(--cp-ink)] mt-0.5">
+                    {formatCurrency(Number(orderDetail.invoice.subtotal ?? orderDetail.invoice.grandTotal ?? 0))}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-[11px] font-medium text-[var(--cp-ink-soft)]">Discount</span>
+                  <p className="cp-tabular text-sm font-semibold text-emerald-700 mt-0.5">
+                    {Number(orderDetail.invoice.discountAmount ?? 0) > 0 ? `-${formatCurrency(Number(orderDetail.invoice.discountAmount))}` : "PKR 0"}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-[11px] font-medium text-[var(--cp-ink-soft)]">Grand Total</span>
+                  <p className="cp-tabular text-sm font-bold text-[var(--cp-ink)] mt-0.5">
+                    {formatCurrency(Number(orderDetail.invoice.grandTotal ?? 0))}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-[11px] font-medium text-[var(--cp-ink-soft)]">Paid</span>
+                  <p className="cp-tabular text-sm font-semibold text-emerald-700 mt-0.5">
+                    {formatCurrency(Number(orderDetail.invoice.paidAmount ?? 0))}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-[11px] font-medium text-[var(--cp-ink-soft)]">Balance</span>
+                  <p className={cn("cp-tabular text-sm font-bold mt-0.5", Number(orderDetail.invoice.balanceAmount ?? 0) > 0 ? "text-[var(--cp-critical)]" : "text-emerald-700")}>
+                    {formatCurrency(Number(orderDetail.invoice.balanceAmount ?? 0))}
+                  </p>
+                </div>
+              </div>
+
+              {/* Items Breakdown Table */}
+              {(orderDetail.invoice.items?.length ?? 0) > 0 && (
+                <div className="overflow-x-auto rounded-lg border border-[var(--cp-border)]">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-[var(--cp-bg,#f8fafc)] text-[var(--cp-ink-soft)] uppercase font-semibold">
+                      <tr>
+                        <th className="p-2">Item / Test</th>
+                        <th className="p-2 text-right">Qty</th>
+                        <th className="p-2 text-right">Unit Price</th>
+                        <th className="p-2 text-right">Discount</th>
+                        <th className="p-2 text-right">Line Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--cp-border)]">
+                      {orderDetail.invoice.items!.map((it) => (
+                        <tr key={it.id}>
+                          <td className="p-2 font-medium">{it.description}</td>
+                          <td className="p-2 text-right cp-tabular">{it.quantity}</td>
+                          <td className="p-2 text-right cp-tabular">{formatCurrency(Number(it.unitPrice))}</td>
+                          <td className="p-2 text-right cp-tabular text-emerald-700">
+                            {Number(it.discount) > 0 ? `-${formatCurrency(Number(it.discount))}` : "—"}
+                          </td>
+                          <td className="p-2 text-right font-semibold cp-tabular">{formatCurrency(Number(it.subtotal))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Payments History */}
+              <div className="space-y-1.5">
+                <span className="text-xs font-semibold text-[var(--cp-ink-soft)]">Payment History</span>
+                {(orderDetail.invoice.payments?.length ?? 0) === 0 ? (
+                  <p className="text-xs text-[var(--cp-ink-faint)] italic">No payments recorded yet.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-lg border border-[var(--cp-border)]">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-[var(--cp-bg,#f8fafc)] text-[var(--cp-ink-soft)] uppercase font-semibold">
+                        <tr>
+                          <th className="p-2">Date & Time</th>
+                          <th className="p-2">Method</th>
+                          <th className="p-2 text-right">Amount</th>
+                          <th className="p-2">Received By</th>
+                          <th className="p-2">Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--cp-border)]">
+                        {orderDetail.invoice.payments!.map((pm) => (
+                          <tr key={pm.id}>
+                            <td className="p-2 whitespace-nowrap">{formatDateTime(pm.createdAt)}</td>
+                            <td className="p-2 font-medium">{pm.paymentMethod.replace(/_/g, " ")}</td>
+                            <td className="p-2 text-right font-semibold text-emerald-700 cp-tabular">
+                              {formatCurrency(Number(pm.amount))}
+                            </td>
+                            <td className="p-2 text-[var(--cp-ink-soft)]">{pm.receivedBy || "Billing Staff"}</td>
+                            <td className="p-2 text-[var(--cp-ink-faint)]">{pm.notes || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--cp-border)]">
+                <div className="flex flex-wrap gap-2">
+                  {canReceivePayment && Number(orderDetail.invoice.balanceAmount ?? 0) > 0 && orderDetail.invoice.status !== "VOID" && (
+                    <Button size="sm" onClick={() => { setPaymentAmount(String(orderDetail.invoice!.balanceAmount)); setPaymentModalOpen(true); }} disabled={billingBusy}>
+                      <Wallet className="h-4 w-4 mr-1.5" />
+                      Receive Payment
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" onClick={() => navigate(`/dashboard/billing/${orderDetail.invoice!.id}`)}>
+                    <ExternalLink className="h-4 w-4 mr-1.5" />
+                    Open in Billing
+                  </Button>
+                </div>
+                {canVoidInvoice && orderDetail.invoice.status !== "VOID" && (
+                  <Button size="sm" variant="emergency" onClick={() => setVoidModalOpen(true)} disabled={billingBusy}>
+                    <Ban className="h-4 w-4 mr-1.5" />
+                    Void Invoice
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -993,6 +1269,78 @@ export default function LabOrderDetail() {
           {order.status === "Completed" && canVerify && <Button size="sm" onClick={() => void verify()} disabled={savingResult}><ShieldCheck className="h-4 w-4" /> Verify Result</Button>}
         </div>
       )}
+
+      {/* Receive Payment Modal */}
+      <Modal open={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} title={`Receive Payment — ${orderDetail?.invoice?.invoiceNumber ?? ""}`}>
+        <div className="space-y-4">
+          <div className="rounded-lg bg-[var(--cp-bg,#f8fafc)] p-3 border border-[var(--cp-border)] text-xs space-y-1">
+            <div className="flex justify-between">
+              <span className="text-[var(--cp-ink-soft)]">Total:</span>
+              <strong className="cp-tabular">{formatCurrency(Number(orderDetail?.invoice?.grandTotal ?? 0))}</strong>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[var(--cp-ink-soft)]">Paid:</span>
+              <span className="cp-tabular">{formatCurrency(Number(orderDetail?.invoice?.paidAmount ?? 0))}</span>
+            </div>
+            <div className="flex justify-between font-bold text-[var(--cp-critical)]">
+              <span>Remaining Balance:</span>
+              <span className="cp-tabular">{formatCurrency(Number(orderDetail?.invoice?.balanceAmount ?? 0))}</span>
+            </div>
+          </div>
+          <div>
+            <Label htmlFor="lab-payment-amount">Payment Amount (PKR) *</Label>
+            <Input
+              id="lab-payment-amount"
+              type="number"
+              min="1"
+              max={Number(orderDetail?.invoice?.balanceAmount ?? 0)}
+              className="cp-tabular mt-1"
+              value={paymentAmount}
+              onChange={(e) => setPaymentAmount(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="lab-payment-method">Payment Method *</Label>
+            <Select id="lab-payment-method" className="mt-1" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as never)}>
+              <option value="CASH">Cash</option>
+              <option value="CARD">Card</option>
+              <option value="BANK_TRANSFER">Bank Transfer</option>
+              <option value="MOBILE_WALLET">Mobile Wallet</option>
+              <option value="ONLINE">Online</option>
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="lab-payment-notes">Notes / Transaction Reference</Label>
+            <Input
+              id="lab-payment-notes"
+              className="mt-1"
+              placeholder="e.g. Receipt #1234, cash counter receipt"
+              value={paymentNotes}
+              onChange={(e) => setPaymentNotes(e.target.value)}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-3 border-t border-[var(--cp-border)]">
+            <Button variant="outline" size="sm" onClick={() => setPaymentModalOpen(false)} disabled={billingBusy}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={() => void handleRecordPayment()} disabled={billingBusy || !paymentAmount}>
+              {billingBusy ? "Recording…" : "Confirm Payment"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Void Invoice Confirmation */}
+      <ConfirmDialog
+        open={voidModalOpen}
+        onClose={() => setVoidModalOpen(false)}
+        onConfirm={handleVoidInvoice}
+        title={`Void Invoice ${orderDetail?.invoice?.invoiceNumber ?? ""}?`}
+        description="Voiding this invoice will cancel the charge and reverse outstanding balances on the lab ledger. This cannot be undone."
+        confirmLabel="Void Invoice"
+        destructive
+        requireReason
+      />
       </>}
     </div>
   )

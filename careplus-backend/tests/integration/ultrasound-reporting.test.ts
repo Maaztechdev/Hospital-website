@@ -10,6 +10,7 @@ const api = "/api/v1";
 describe("Integration: ultrasound reporting workflow", () => {
   let doctorToken: string;
   let techToken: string;
+  let receptionistToken: string;
   let patientId: string;
 
   beforeAll(async () => {
@@ -24,9 +25,14 @@ describe("Integration: ultrasound reporting workflow", () => {
       create: { userId: doctor.id, consultationFee: 1500, isAvailable: true },
     });
     const tech = await prisma.user.upsert({
-      where: { email: "ultrasoundtech@careplus.local" },
+      where: { email: "ultrasound-test-tech@careplus.local" },
       update: {},
-      create: { name: "Ultrasound Tech", email: "ultrasoundtech@careplus.local", passwordHash: await argon2.hash("Staff@12345"), role: "ULTRASOUND_TECH" },
+      create: { name: "Ultrasound Tech", email: "ultrasound-test-tech@careplus.local", passwordHash: await argon2.hash("Staff@12345"), role: "ULTRASOUND_TECH" },
+    });
+    await prisma.user.upsert({
+      where: { email: "ultrasound-receptionist@careplus.local" },
+      update: {},
+      create: { name: "Ultrasound Receptionist", email: "ultrasound-receptionist@careplus.local", passwordHash: await argon2.hash("Staff@12345"), role: "RECEPTIONIST" },
     });
 
     const patient = await prisma.patient.upsert({
@@ -40,16 +46,20 @@ describe("Integration: ultrasound reporting workflow", () => {
     expect(doctorLogin.status).toBe(200);
     doctorToken = doctorLogin.body.data.accessToken;
 
-    const techLogin = await request(app).post(`${api}/auth/login`).send({ email: "ultrasoundtech@careplus.local", password: "Staff@12345" });
+    const techLogin = await request(app).post(`${api}/auth/login`).send({ email: "ultrasound-test-tech@careplus.local", password: "Staff@12345" });
     expect(techLogin.status).toBe(200);
     techToken = techLogin.body.data.accessToken;
+
+    const receptionistLogin = await request(app).post(`${api}/auth/login`).send({ email: "ultrasound-receptionist@careplus.local", password: "Staff@12345" });
+    expect(receptionistLogin.status).toBe(200);
+    receptionistToken = receptionistLogin.body.data.accessToken;
   });
 
   afterAll(async () => {
     await prisma.ultrasoundReport.deleteMany({ where: { patient: { mrNumber: "MR-ULTRA-001" } } });
     await prisma.patient.deleteMany({ where: { mrNumber: "MR-ULTRA-001" } });
     await prisma.doctor.deleteMany({ where: { user: { email: { in: ["ultrasound-doctor@careplus.local"] } } } });
-    await prisma.user.deleteMany({ where: { email: { in: ["ultrasound-doctor@careplus.local", "ultrasoundtech@careplus.local"] } } });
+    await prisma.user.deleteMany({ where: { email: { in: ["ultrasound-doctor@careplus.local", "ultrasound-test-tech@careplus.local", "ultrasound-receptionist@careplus.local"] } } });
     await redis.quit();
   });
 
@@ -69,10 +79,14 @@ describe("Integration: ultrasound reporting workflow", () => {
     const queueResponse = await request(app).get(`${api}/ultrasound/queue`).set("Authorization", `Bearer ${techToken}`);
     expect(queueResponse.status).toBe(200);
     expect(queueResponse.body.data.some((item: { patientId: string }) => item.patientId === patientId)).toBe(true);
+
+    const doctorQueue = await request(app).get(`${api}/ultrasound/queue`).set("Authorization", `Bearer ${doctorToken}`);
+    expect(doctorQueue.status).toBe(200);
+    expect(doctorQueue.body.data.some((item: { patientId: string }) => item.patientId === patientId)).toBe(true);
   });
 
-  it("denies queue access to non-tech roles", async () => {
-    const response = await request(app).get(`${api}/ultrasound/queue`).set("Authorization", `Bearer ${doctorToken}`);
+  it("denies queue access to receptionist roles", async () => {
+    const response = await request(app).get(`${api}/ultrasound/queue`).set("Authorization", `Bearer ${receptionistToken}`);
     expect(response.status).toBe(403);
     expect(response.body.success).toBe(false);
   });

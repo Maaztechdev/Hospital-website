@@ -50,7 +50,7 @@ export function Footer() {
 
           <div>
             <h4 className="mb-4 text-sm font-semibold text-[var(--color-ink)]">Quick Links</h4>
-            <ul className="space-y-2.5 text-sm text-[var(--color-ink-soft)]">
+            <ul className="space-y-1 text-sm text-[var(--color-ink-soft)]">
               {[
                 ["/about", "About Us"],
                 ["/departments", "Departments"],
@@ -59,7 +59,7 @@ export function Footer() {
                 ["/appointment", "Book Appointment"],
               ].map(([to, label]) => (
                 <li key={to}>
-                  <Link to={to} className="transition-colors hover:text-[var(--color-primary)]">
+                  <Link to={to} className="inline-flex min-h-[36px] items-center transition-colors hover:text-[var(--color-primary)]">
                     {label}
                   </Link>
                 </li>
@@ -69,7 +69,7 @@ export function Footer() {
 
           <div>
             <h4 className="mb-4 text-sm font-semibold text-[var(--color-ink)]">Resources</h4>
-            <ul className="space-y-2.5 text-sm text-[var(--color-ink-soft)]">
+            <ul className="space-y-1 text-sm text-[var(--color-ink-soft)]">
               {[
                 ["/blog", "Health Blog"],
                 ["/contact", "Contact Us"],
@@ -77,7 +77,7 @@ export function Footer() {
                 ["/appointment", "Patient Portal"],
               ].map(([to, label]) => (
                 <li key={to}>
-                  <Link to={to} className="transition-colors hover:text-[var(--color-primary)]">
+                  <Link to={to} className="inline-flex min-h-[36px] items-center transition-colors hover:text-[var(--color-primary)]">
                     {label}
                   </Link>
                 </li>

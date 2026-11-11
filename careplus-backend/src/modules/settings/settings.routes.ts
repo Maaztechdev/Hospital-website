@@ -12,9 +12,12 @@ import { validate } from "@common/middleware/validate";
 import { asyncHandler } from "@common/utils/asyncHandler";
 import { sendSuccess } from "@common/utils/apiResponse";
 import { writeAuditLog } from "@common/utils/auditLog";
+import { savePrivateUpload } from "@common/utils/privateFiles";
 import { assertDoctorOwns } from "@common/utils/recordAuthorization";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from "@common/errors/AppError";
 import { DepartmentStatus, NotificationType, Role } from "@prisma/client";
+import { invalidateRolePermissionsCache } from "@common/services/rolePermissions.service";
+import { invalidateNotificationTemplatesCache } from "@common/utils/notify";
 
 const keyParamSchema = z.object({ key: z.string().min(1) });
 const currencies = ["PKR", "USD", "AED", "SAR", "GBP", "EUR"] as const;
@@ -32,11 +35,17 @@ const hospitalProfileSchema = z.object({
   clinicDaysTimings: z.string().trim().max(500).nullable().optional(),
   refillText: z.string().trim().max(500).nullable().optional(),
   dispensingStampText: z.string().trim().max(200).nullable().optional(),
+  reportFooter: z.string().trim().max(1000).nullable().optional(),
   currency: z.enum(currencies),
   timezone: z.string().refine((value) => { try { new Intl.DateTimeFormat("en", { timeZone: value }); return true; } catch { return false; } }, "Invalid IANA timezone"),
 });
 const setSettingSchema = z.object({ value: z.unknown() });
 const upload = multer({ storage: multer.memoryStorage() });
+const signatureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => callback(null, ["image/jpeg", "image/png"].includes(file.mimetype)),
+});
 const profileId = "default";
 const departmentIdSchema = z.object({ id: z.string().uuid() });
 const departmentStatusSchema = z.object({ status: z.enum(["ACTIVE", "INACTIVE"]) });
@@ -115,11 +124,21 @@ const departmentInclude = {
   _count: { select: { doctors: true, users: true, appointments: true } },
 } as const;
 
+function validateImageSignature(buffer: Buffer, mimeType: string): boolean {
+  if (mimeType === "image/jpeg") return buffer.length >= 3 && buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+  if (mimeType === "image/png") return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (mimeType === "image/webp") return buffer.length >= 12 && buffer.subarray(0, 4).toString() === "RIFF" && buffer.subarray(8, 12).toString() === "WEBP";
+  if (mimeType === "image/x-icon") return buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0, 0, 1, 0]));
+  return false;
+}
+
 async function saveHospitalAsset(file: Express.Multer.File, type: "logo" | "favicon") {
   const maxBytes = type === "logo" ? 2 * 1024 * 1024 : 512 * 1024;
-  const allowed = type === "logo" ? ["image/png", "image/jpeg", "image/svg+xml"] : ["image/png", "image/jpeg", "image/svg+xml", "image/x-icon"];
-  if (file.size > maxBytes || !allowed.includes(file.mimetype)) throw new BadRequestError("Unsupported hospital asset or file size exceeded");
-  const extension = { "image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg", "image/x-icon": ".ico" }[file.mimetype];
+  const allowed = type === "logo" ? ["image/png", "image/jpeg", "image/webp"] : ["image/png", "image/jpeg", "image/webp", "image/x-icon"];
+  if (file.size > maxBytes || !allowed.includes(file.mimetype) || !validateImageSignature(file.buffer, file.mimetype)) {
+    throw new BadRequestError("Unsupported hospital asset, invalid file signature, or size exceeded. SVG is disallowed; use PNG, JPEG, or WebP.");
+  }
+  const extension = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/x-icon": ".ico" }[file.mimetype];
   const relativePath = path.join("hospital-profile", `${randomUUID()}${extension}`);
   const absolutePath = path.join(path.resolve(env.UPLOAD_DIR), relativePath);
   await mkdir(path.dirname(absolutePath), { recursive: true, mode: 0o700 });
@@ -130,9 +149,11 @@ async function saveHospitalAsset(file: Express.Multer.File, type: "logo" | "favi
 
 async function savePrescriptionPadAsset(file: Express.Multer.File, type: "logo" | "qr-code") {
   const maxBytes = type === "logo" ? 2 * 1024 * 1024 : 1 * 1024 * 1024;
-  const allowed = ["image/png", "image/jpeg", "image/svg+xml"];
-  if (file.size > maxBytes || !allowed.includes(file.mimetype)) throw new BadRequestError("Unsupported prescription pad asset or file size exceeded");
-  const extension = { "image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg" }[file.mimetype];
+  const allowed = ["image/png", "image/jpeg", "image/webp"];
+  if (file.size > maxBytes || !allowed.includes(file.mimetype) || !validateImageSignature(file.buffer, file.mimetype)) {
+    throw new BadRequestError("Unsupported prescription pad asset, invalid file signature, or size exceeded. SVG is disallowed; use PNG, JPEG, or WebP.");
+  }
+  const extension = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp" }[file.mimetype];
   const relativePath = path.join("prescription-pad", `${randomUUID()}${extension}`);
   const absolutePath = path.join(path.resolve(env.UPLOAD_DIR), relativePath);
   await mkdir(path.dirname(absolutePath), { recursive: true, mode: 0o700 });
@@ -180,13 +201,14 @@ router.delete("/medicine-categories/:id", requireRole(["ADMIN"]), validate({ par
   sendSuccess(res, 200, { data: null, message: "Medicine category deleted" });
 }));
 
-router.get("/role-permissions", requireRole(["ADMIN"]), asyncHandler(async (_req: Request, res: Response) => {
+router.get("/role-permissions", asyncHandler(async (_req: Request, res: Response) => {
   const permissions = await prisma.rolePermission.findMany({ orderBy: [{ role: "asc" }, { module: "asc" }] });
   sendSuccess(res, 200, { data: permissions });
 }));
 router.put("/role-permissions", requireRole(["ADMIN"]), validate({ body: rolePermissionSchema }), asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new UnauthorizedError();
   const permission = await prisma.rolePermission.upsert({ where: { role_module: { role: req.body.role, module: req.body.module } }, create: req.body, update: { allowedActions: req.body.allowedActions } });
+  invalidateRolePermissionsCache();
   await writeAuditLog({ userId: req.user.sub, action: "UPDATE", module: "settings", entityType: "RolePermission", entityId: permission.id, newValues: permission, req });
   sendSuccess(res, 200, { data: permission, message: "Role permission updated" });
 }));
@@ -199,6 +221,7 @@ router.get("/notification-templates", requireRole(["ADMIN"]), asyncHandler(async
 router.post("/notification-templates", requireRole(["ADMIN"]), validate({ body: notificationTemplateSchema }), asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new UnauthorizedError();
   const template = await prisma.notificationTemplate.create({ data: req.body });
+  invalidateNotificationTemplatesCache();
   await writeAuditLog({ userId: req.user.sub, action: "CREATE", module: "settings", entityType: "NotificationTemplate", entityId: template.id, newValues: template, req });
   sendSuccess(res, 201, { data: template, message: "Notification template created" });
 }));
@@ -206,6 +229,7 @@ router.post("/notification-templates", requireRole(["ADMIN"]), validate({ body: 
 router.put("/notification-templates/:id", requireRole(["ADMIN"]), validate({ params: notificationTemplateIdSchema, body: notificationTemplateSchema }), asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new UnauthorizedError();
   const template = await prisma.notificationTemplate.update({ where: { id: req.params.id }, data: req.body }).catch(() => { throw new NotFoundError("Notification template not found"); });
+  invalidateNotificationTemplatesCache();
   await writeAuditLog({ userId: req.user.sub, action: "UPDATE", module: "settings", entityType: "NotificationTemplate", entityId: template.id, newValues: template, req });
   sendSuccess(res, 200, { data: template, message: "Notification template updated" });
 }));
@@ -213,6 +237,7 @@ router.put("/notification-templates/:id", requireRole(["ADMIN"]), validate({ par
 router.delete("/notification-templates/:id", requireRole(["ADMIN"]), validate({ params: notificationTemplateIdSchema }), asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new UnauthorizedError();
   const template = await prisma.notificationTemplate.delete({ where: { id: req.params.id } }).catch(() => { throw new NotFoundError("Notification template not found"); });
+  invalidateNotificationTemplatesCache();
   await writeAuditLog({ userId: req.user.sub, action: "DELETE", module: "settings", entityType: "NotificationTemplate", entityId: template.id, oldValues: template, req });
   sendSuccess(res, 200, { data: null, message: "Notification template deleted" });
 }));
@@ -323,6 +348,26 @@ router.put("/hospital-profile", requireRole(["ADMIN"]), validate({ body: hospita
   const profile = await prisma.hospitalProfile.upsert({ where: { id: profileId }, create: { id: profileId, ...req.body }, update: req.body });
   await writeAuditLog({ userId: req.user.sub, action: "UPDATE", module: "settings", entityType: "HospitalProfile", entityId: profileId, newValues: profile, req });
   sendSuccess(res, 200, { data: profile, message: "Hospital profile updated" });
+}));
+
+router.get("/ultrasound-doctors", requireRole(["ADMIN"]), asyncHandler(async (_req: Request, res: Response) => {
+  const doctors = await prisma.doctor.findMany({
+    where: { user: { role: { in: [Role.DOCTOR, Role.RADIOLOGIST] } } },
+    select: { id: true, signatureUrl: true, user: { select: { name: true, role: true } } },
+    orderBy: { user: { name: "asc" } },
+  });
+  sendSuccess(res, 200, { data: doctors });
+}));
+
+router.post("/ultrasound-doctors/:doctorId/signature", requireRole(["ADMIN"]), signatureUpload.single("file"), asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user) throw new UnauthorizedError();
+  const doctorId = z.string().uuid().safeParse(req.params.doctorId);
+  if (!doctorId.success) throw new BadRequestError("Invalid doctor ID");
+  if (!req.file) throw new BadRequestError("A PNG or JPEG signature image is required");
+  const url = await savePrivateUpload(req.file, "image", "doctor-signatures");
+  const doctor = await prisma.doctor.update({ where: { id: doctorId.data }, data: { signatureUrl: url }, select: { id: true, signatureUrl: true, user: { select: { name: true, role: true } } } });
+  await writeAuditLog({ userId: req.user.sub, action: "UPDATE", module: "settings", entityType: "DoctorSignature", entityId: doctor.id, newValues: { signatureUrl: url }, req });
+  sendSuccess(res, 200, { data: doctor, message: "Doctor signature uploaded" });
 }));
 
 for (const type of ["logo", "favicon"] as const) {

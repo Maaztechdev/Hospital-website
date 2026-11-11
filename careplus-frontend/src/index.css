@@ -43,12 +43,15 @@
   --animate-heartbeat-draw: heartbeat-draw 2.8s ease-in-out infinite;
   --animate-bounce-once: bounce-once 1.1s ease-in-out 1;
 }
-
 @layer base {
   html {
     scroll-behavior: smooth;
-    overflow-x: hidden;
+    overflow-x: clip;
     margin: 0;
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar {
+    display: none;
   }
   body {
     margin: 0;
@@ -57,7 +60,7 @@
     font-family: var(--font-body);
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
   h1, h2, h3, h4 {
     font-family: var(--font-display);
@@ -211,32 +214,7 @@
   .doctor-flip-inner, .testimonial-track { transition: none !important; }
 }
 
-@media print {
-  .no-print { display: none !important; }
-  body * { visibility: hidden !important; }
-  #pharmacy-print-root, #pharmacy-print-root * { visibility: visible !important; }
-  #pharmacy-print-root { display: block !important; position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; }
-  #lab-report-print, #lab-report-print * { visibility: visible !important; }
-  #lab-report-print { display: block !important; position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; margin: 0 !important; border: 0 !important; }
-  #confirmation-print, #confirmation-print * { visibility: visible !important; }
-  #confirmation-print { display: block !important; position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; margin: 0 !important; border: 1px solid #c8cfcc !important; border-radius: 0 !important; }
-  #confirmation-print > .bg-\[var\(--color-accent\)\] { background: white !important; border-bottom: 2px solid #111 !important; color: black !important; }
-  #confirmation-print > .bg-\[var\(--color-accent\)\] svg { color: #111 !important; }
-  #confirmation-print > .bg-\[var\(--color-accent\)\] p { color: #333 !important; }
-  #confirmation-print > div:not(.confirmation-print-header) { break-inside: avoid; }
-  .confirmation-print-header { display: flex !important; align-items: center; gap: 10px; padding: 0 0 12px; border-bottom: 2px solid #111; color: #111; }
-  .confirmation-print-logo { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; color: #111; }
-  .confirmation-print-logo img { width: 36px; height: 36px; object-fit: contain; }
-  .confirmation-print-logo svg { width: 30px; height: 30px; }
-  .confirmation-print-header strong, .confirmation-print-header span { display: block; }
-  .confirmation-print-header strong { font-size: 16px; }
-  .confirmation-print-header span { margin-top: 2px; font-size: 11px; color: #555; }
-  #confirmation-print .text-\[var\(--color-ink-soft\)\] { color: #444 !important; }
-  #confirmation-print .text-\[var\(--color-primary\)\] { color: #111 !important; }
-  body { background: white !important; }
-  * { animation: none !important; box-shadow: none !important; color: black !important; }
-  @page { margin: 12mm; }
-}
+
 
 /* =========================================================
    Khalida Medicare Dashboard (Phase 2) design tokens
@@ -314,10 +292,21 @@
   50% { box-shadow: 0 0 0 6px rgba(192, 57, 43, 0.08); }
 }
 
-@media print {
-  .cp-print-hide { display: none !important; }
-}
+/* =========================================================
+   Centralized CarePlus Print System
+   Covers all printable modules:
+   - #careplus-print-root (Prescriptions & Discharge Summaries)
+   - #confirmation-print (Public Appointment Booking Slip)
+   - #admission-print-root (Ward Admission Slip)
+   - #pharmacy-print-root / .pharmacy-print-document (Pharmacy Invoices & Receipts)
+   - #invoice-print-root (Hospital Invoices & Receipts)
+   - #lab-report-print (Clinical Laboratory Diagnostic Reports)
+   - #ultrasound-print-root (Diagnostic Ultrasound Reports)
+   ========================================================= */
 
+.cp-print-hide { display: none !important; }
+
+/* 1. Pharmacy Print Styles */
 .pharmacy-print-document { display: none; font-family: Georgia, "Times New Roman", serif; color: #111; background: #fff; }
 .pharmacy-print-header { display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #111; padding-bottom: 10px; }
 .pharmacy-print-header h1 { margin: 0; font-size: 18px; }
@@ -335,73 +324,41 @@
 .pharmacy-print-signature { display: flex; justify-content: flex-end; gap: 32px; margin-top: 20px; }
 .pharmacy-print-footer { margin-top: 28px; border-top: 1px solid #bbb; padding-top: 8px; text-align: center; font-size: 10px; }
 
-@media print {
-  .pharmacy-print-document { display: block !important; }
-  .pharmacy-print-receipt { width: 72mm !important; margin: 0 auto; }
-  .pharmacy-print-receipt .pharmacy-print-header { display: block; text-align: center; }
-  .pharmacy-print-receipt .pharmacy-print-header strong { display: block; margin: 8px 0 0; }
-  .pharmacy-print-receipt .pharmacy-print-meta { grid-template-columns: 1fr 1fr; gap: 7px; margin: 12px 0; }
-  .pharmacy-print-receipt .pharmacy-print-table { font-size: 10px; }
-  .pharmacy-print-receipt .pharmacy-print-table th, .pharmacy-print-receipt .pharmacy-print-table td { padding: 5px 2px; }
-  .pharmacy-print-receipt .pharmacy-print-signature { display: block; }
-  .pharmacy-print-receipt .pharmacy-print-signature .pharmacy-print-field + .pharmacy-print-field { margin-top: 8px; }
-}
-
+/* 2. Invoice Print Styles */
 .invoice-print-root { display: none; }
+.invoice-print-document { width: 100%; color: #111; background: #fff; font: 9pt/1.3 Arial, Helvetica, sans-serif; }
+.invoice-print-header { display: flex; align-items: center; gap: 10px; border-bottom: 2px solid #111; padding-bottom: 8px; }
+.invoice-print-logo { width: 48px; height: 48px; object-fit: contain; }
+.invoice-print-hospital { flex: 1; min-width: 0; }
+.invoice-print-hospital h1 { margin: 0 0 2px; font-size: 16pt; line-height: 1.15; }
+.invoice-print-hospital p { margin: 1px 0; font-size: 8pt; color: #333; }
+.invoice-print-status { display: inline-block; border: 1px solid currentColor; border-radius: 3px; padding: 5px 8px; font-size: 9pt; font-weight: 700; letter-spacing: .04em; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.invoice-print-status-paid { color: #12633a; background: #e5f4eb; }
+.invoice-print-status-partial { color: #805500; background: #fff2cc; }
+.invoice-print-status-unpaid, .invoice-print-status-void { color: #9b2424; background: #fde8e8; }
+.invoice-print-title-row { display: flex; justify-content: space-between; align-items: baseline; margin: 10px 0 7px; }
+.invoice-print-title-row h2 { margin: 0; font-size: 13pt; }
+.invoice-print-title-row strong { font-size: 10pt; }
+.invoice-print-patient { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.invoice-print-patient span { display: block; margin-bottom: 2px; color: #555; font-size: 7pt; text-transform: uppercase; }
+.invoice-print-patient strong { display: block; overflow-wrap: anywhere; font-size: 8.5pt; }
+.invoice-print-items { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8pt; }
+.invoice-print-items th, .invoice-print-items td { border-bottom: 1px solid #bbb; padding: 5px 4px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.invoice-print-items th { border-top: 1px solid #777; background: #f0f0f0; font-size: 7pt; text-transform: uppercase; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.invoice-print-items th:first-child, .invoice-print-items td:first-child { width: 31%; }
+.invoice-print-items th:nth-child(2), .invoice-print-items td:nth-child(2) { width: 15%; }
+.invoice-print-items .number { text-align: right; white-space: nowrap; }
+.invoice-print-totals { display: flex; flex-direction: column; gap: 3px; width: 48%; margin: 8px 0 0 auto; }
+.invoice-print-totals div { display: flex; justify-content: space-between; gap: 12px; }
+.invoice-print-totals .grand { border-top: 1px solid #777; margin-top: 2px; padding-top: 4px; font-size: 10pt; font-weight: 700; }
+.invoice-print-totals .balance { border-top: 1px solid #bbb; padding-top: 3px; font-weight: 700; }
+.invoice-print-payments { margin-top: 11px; }
+.invoice-print-payments h2 { margin: 0 0 5px; font-size: 10pt; }
+.invoice-print-payment-table { font-size: 7.5pt; }
+.invoice-print-payment-table th, .invoice-print-payment-table td { padding: 4px; }
+.invoice-print-footer { margin-top: 12px; border-top: 1px solid #aaa; padding-top: 6px; text-align: center; color: #444; font-size: 8pt; }
 
-@media print {
-  @page { size: A4; margin: 12mm; }
-
-  html, body { width: 100%; height: auto; margin: 0 !important; background: #fff !important; }
-  #invoice-print-root, #invoice-print-root * { visibility: visible !important; }
-  #invoice-print-root {
-    display: block !important;
-    position: fixed !important;
-    inset: 0 auto auto 0 !important;
-    width: 100% !important;
-    margin: 0 !important;
-    color: #111 !important;
-    background: #fff !important;
-  }
-  .invoice-print-document {
-    width: 100%;
-    color: #111 !important;
-    background: #fff !important;
-    font: 9pt/1.3 Arial, Helvetica, sans-serif;
-  }
-  .invoice-print-header { display: flex; align-items: center; gap: 10px; border-bottom: 2px solid #111; padding-bottom: 8px; }
-  .invoice-print-logo { width: 48px; height: 48px; object-fit: contain; }
-  .invoice-print-hospital { flex: 1; min-width: 0; }
-  .invoice-print-hospital h1 { margin: 0 0 2px; font-size: 16pt; line-height: 1.15; }
-  .invoice-print-hospital p { margin: 1px 0; font-size: 8pt; color: #333 !important; }
-  .invoice-print-status { display: inline-block; border: 1px solid currentColor; border-radius: 3px; padding: 5px 8px; font-size: 9pt; font-weight: 700; letter-spacing: .04em; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .invoice-print-status-paid { color: #12633a !important; background: #e5f4eb !important; }
-  .invoice-print-status-partial { color: #805500 !important; background: #fff2cc !important; }
-  .invoice-print-status-unpaid, .invoice-print-status-void { color: #9b2424 !important; background: #fde8e8 !important; }
-  .invoice-print-title-row { display: flex; justify-content: space-between; align-items: baseline; margin: 10px 0 7px; }
-  .invoice-print-title-row h2 { margin: 0; font-size: 13pt; }
-  .invoice-print-title-row strong { font-size: 10pt; }
-  .invoice-print-patient { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
-  .invoice-print-patient span { display: block; margin-bottom: 2px; color: #555 !important; font-size: 7pt; text-transform: uppercase; }
-  .invoice-print-patient strong { display: block; overflow-wrap: anywhere; font-size: 8.5pt; }
-  .invoice-print-items { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8pt; }
-  .invoice-print-items th, .invoice-print-items td { border-bottom: 1px solid #bbb; padding: 5px 4px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-  .invoice-print-items th { border-top: 1px solid #777; background: #f0f0f0 !important; font-size: 7pt; text-transform: uppercase; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .invoice-print-items th:first-child, .invoice-print-items td:first-child { width: 31%; }
-  .invoice-print-items th:nth-child(2), .invoice-print-items td:nth-child(2) { width: 15%; }
-  .invoice-print-items .number { text-align: right; white-space: nowrap; }
-  .invoice-print-totals { display: flex; flex-direction: column; gap: 3px; width: 48%; margin: 8px 0 0 auto; }
-  .invoice-print-totals div { display: flex; justify-content: space-between; gap: 12px; }
-  .invoice-print-totals .grand { border-top: 1px solid #777; margin-top: 2px; padding-top: 4px; font-size: 10pt; font-weight: 700; }
-  .invoice-print-totals .balance { border-top: 1px solid #bbb; padding-top: 3px; font-weight: 700; }
-  .invoice-print-payments { margin-top: 11px; }
-  .invoice-print-payments h2 { margin: 0 0 5px; font-size: 10pt; }
-  .invoice-print-payment-table { font-size: 7.5pt; }
-  .invoice-print-payment-table th, .invoice-print-payment-table td { padding: 4px; }
-  .invoice-print-footer { margin-top: 12px; border-top: 1px solid #aaa; padding-top: 6px; text-align: center; color: #444 !important; font-size: 8pt; }
-  .invoice-print-document tr, .invoice-print-header, .invoice-print-patient, .invoice-print-totals, .invoice-print-footer { break-inside: avoid; page-break-inside: avoid; }
-}
-
+/* 3. Lab Report Print Styles */
 .lab-report-sheet {
   position: relative;
   overflow: hidden;
@@ -465,46 +422,384 @@
   .lab-report-footer { grid-template-columns: 1fr; }
 }
 
+/* 4. Ultrasound Print Styles */
+.ultrasound-print-document {
+  display: none;
+  box-sizing: border-box;
+  color: #17212b;
+  background: #fff;
+  font-family: Arial, Helvetica, sans-serif;
+}
+.ultrasound-print-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid #0e5c56;
+  padding-bottom: 10px;
+}
+.ultrasound-print-logo { width: 48px; height: 48px; object-fit: contain; }
+.ultrasound-print-logo-fallback { display: grid; width: 48px; height: 48px; place-items: center; border: 1px solid #c9d6d3; color: #0e5c56; font-size: 14pt; font-weight: 700; }
+.ultrasound-print-hospital h1 { margin: 0 0 3px; color: #0e5c56; font-size: 16pt; line-height: 1.15; }
+.ultrasound-print-hospital p { margin: 2px 0; color: #52655f; font-size: 8pt; }
+.ultrasound-print-title { text-align: right; }
+.ultrasound-print-title span { color: #52655f; font-size: 7pt; letter-spacing: .08em; text-transform: uppercase; }
+.ultrasound-print-title h2 { margin: 3px 0 0; color: #17212b; font-size: 12pt; }
+.ultrasound-print-patient {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px 14px;
+  margin-top: 13px;
+  border-bottom: 1px solid #c9d6d3;
+  padding-bottom: 12px;
+}
+.ultrasound-print-patient div { min-width: 0; }
+.ultrasound-print-patient span { display: block; color: #52655f; font-size: 7pt; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.ultrasound-print-patient strong { display: block; margin-top: 2px; overflow-wrap: anywhere; font-size: 8.5pt; }
+.ultrasound-print-section { margin-top: 14px; }
+.ultrasound-print-section h3, .ultrasound-print-images h3 { margin: 0 0 5px; color: #0e5c56; font-size: 10pt; }
+.ultrasound-print-section p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ultrasound-print-structured { margin-top: 14px; }
+.ultrasound-print-structured h3 { margin: 0 0 5px; color: #0e5c56; font-size: 10pt; }
+.ultrasound-print-structured dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 12px; margin: 0; }
+.ultrasound-print-structured dl > div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid #e1e8e6; padding: 3px 0; }
+.ultrasound-print-structured dt { color: #52655f; }
+.ultrasound-print-structured dd { margin: 0; font-weight: 600; text-align: right; }
+.ultrasound-print-images { margin-top: 16px; }
+.ultrasound-print-image-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 7px; }
+.ultrasound-print-image-grid figure { min-width: 0; margin: 0; border: 1px solid #d5e2e0; padding: 5px; }
+.ultrasound-print-image-grid img { display: block; width: 100%; max-height: 62mm; object-fit: contain; }
+.ultrasound-print-image-grid figcaption { margin-top: 4px; color: #52655f; font-size: 7pt; text-align: center; }
+.ultrasound-print-footer {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 30px;
+  border-top: 1px solid #c9d6d3;
+  padding-top: 12px;
+}
+.ultrasound-print-signature { display: flex; min-width: 180px; flex-direction: column; align-items: flex-start; font-size: 8pt; }
+.ultrasound-print-signature-image { max-width: 180px; max-height: 28mm; margin: 2px 0 4px; object-fit: contain; }
+.ultrasound-print-signature-line { width: 180px; margin-bottom: 4px; border-top: 1px solid #52655f; }
+.ultrasound-print-signature strong { font-size: 9pt; }
+.ultrasound-print-signature > span:last-child { color: #52655f; }
+.ultrasound-print-footer > p { margin: 0; color: #52655f; font-size: 7pt; }
+
+/* 5. CarePlus Shared Print Sheet (Prescriptions, Discharge, Patient Summary) */
+.careplus-print-sheet {
+  display: block;
+  font-family: Arial, Helvetica, sans-serif;
+  color: #111;
+  background: #fff;
+  padding: 16px;
+  line-height: 1.4;
+  font-size: 10pt;
+}
+.careplus-print-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 2px solid #0e5c56;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+.careplus-print-logo { width: 50px; height: 50px; object-fit: contain; }
+.careplus-print-logo-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 50px;
+  height: 50px;
+  border: 1px solid #c9d6d3;
+  color: #0e5c56;
+  font-weight: 700;
+  font-size: 16pt;
+}
+.careplus-print-hospital { flex: 1; }
+.careplus-print-hospital h1 { margin: 0; font-size: 16pt; color: #0e5c56; line-height: 1.2; }
+.careplus-print-hospital p { margin: 2px 0 0; font-size: 8pt; color: #555; }
+.careplus-print-title { text-align: right; }
+.careplus-print-title h2 { margin: 0; font-size: 13pt; color: #111; }
+.careplus-print-title p { margin: 2px 0 0; font-size: 9pt; color: #555; }
+.careplus-print-body { margin-top: 10px; }
+.careplus-print-section { margin-top: 12px; }
+.careplus-print-section h3 {
+  margin: 0 0 6px;
+  font-size: 9.5pt;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #0e5c56;
+  border-bottom: 1px solid #d5e2e0;
+  padding-bottom: 3px;
+}
+.careplus-print-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; margin: 0; }
+.careplus-print-rows > div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px dotted #e1e8e6; padding: 2px 0; }
+.careplus-print-rows dt { color: #555; font-size: 8.5pt; }
+.careplus-print-rows dd { margin: 0; font-weight: 600; font-size: 8.5pt; text-align: right; }
+.careplus-compact-vitals {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px 6px;
+  margin: 2px 0;
+}
+.careplus-compact-vital-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  background: #f8faf9;
+  border: 1px solid #d5e2e0;
+  border-radius: 2px;
+  padding: 2.5px 5px;
+  font-size: 8pt;
+  line-height: 1.15;
+}
+.careplus-compact-vital-label {
+  color: #4a6663;
+  font-weight: 500;
+  font-size: 7.5pt;
+}
+.careplus-compact-vital-value {
+  color: #111;
+  font-weight: 700;
+  font-size: 8pt;
+}
+.careplus-print-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.careplus-print-list { margin: 0; padding-left: 18px; font-size: 9pt; }
+.careplus-print-table, .careplus-print-sheet table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-top: 4px; }
+.careplus-print-table th, .careplus-print-sheet table th,
+.careplus-print-table td, .careplus-print-sheet table td { border-bottom: 1px solid #d5e2e0; padding: 5px 4px; text-align: left; }
+.careplus-print-table th, .careplus-print-sheet table th { background: #f0f6f5; color: #0e5c56; font-size: 8pt; text-transform: uppercase; }
+.careplus-print-critical { color: #a51e1e; font-weight: 700; margin-bottom: 4px; }
+.careplus-print-balance { font-size: 14pt; font-weight: 700; color: #0e5c56; margin: 0; }
+.careplus-print-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 24px;
+  border-top: 1px solid #aaa;
+  padding-top: 8px;
+  font-size: 8pt;
+  color: #666;
+}
+.careplus-print-action {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: #0e5c56;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(14, 92, 86, 0.3);
+}
+
+/* 6. Ward Admission Slip Print Styles */
+.admission-print-document {
+  display: block;
+  font-family: Arial, Helvetica, sans-serif;
+  color: #111;
+  background: #fff;
+  padding: 16px;
+  font-size: 9.5pt;
+  line-height: 1.4;
+}
+.admission-print-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid #0e5c56;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+.admission-print-logo { width: 48px; height: 48px; object-fit: contain; }
+.admission-print-logo-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid #c9d6d3;
+  color: #0e5c56;
+  font-weight: 700;
+  font-size: 14pt;
+}
+.admission-print-hospital { flex: 1; min-width: 0; }
+.admission-print-hospital h1 { margin: 0; font-size: 15pt; color: #0e5c56; line-height: 1.2; }
+.admission-print-hospital p { margin: 2px 0 0; font-size: 8pt; color: #555; }
+.admission-print-title { text-align: right; }
+.admission-print-title h2 { margin: 0; font-size: 13pt; color: #111; }
+.admission-print-title span { display: block; margin-top: 2px; font-size: 8.5pt; color: #0e5c56; font-weight: 600; }
+.admission-print-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  border-top: 1px solid #e1e8e6;
+  border-bottom: 1px solid #e1e8e6;
+  padding: 12px 0;
+  margin: 12px 0;
+}
+.admission-print-grid > div { display: flex; justify-content: space-between; gap: 8px; }
+.admission-print-grid dt { color: #555; font-size: 8.5pt; text-transform: uppercase; }
+.admission-print-grid dd { margin: 0; font-weight: 600; font-size: 9pt; text-align: right; }
+.admission-print-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 24px;
+  padding-top: 8px;
+  border-top: 1px solid #aaa;
+  font-size: 8pt;
+  color: #666;
+}
+
+/* 7. Public Confirmation Slip Header */
+.confirmation-print-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid #0e5c56;
+  padding: 14px 18px;
+  background: #f8fbfa;
+}
+.confirmation-print-logo { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; }
+.confirmation-print-logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.confirmation-print-header strong { display: block; font-size: 14pt; color: #0e5c56; }
+.confirmation-print-header span { display: block; font-size: 8.5pt; color: #555; }
+
+/* =========================================================
+   Unified Master Print Media Query
+   ========================================================= */
 @media print {
   @page {
     size: A4;
-    margin: 12mm;
-    @top-left { content: ""; }
-    @top-center { content: ""; }
-    @top-right { content: ""; }
-    @bottom-left { content: ""; }
-    @bottom-center { content: "Page " counter(page); font: 9px Arial, sans-serif; color: #52655f; }
-    @bottom-right { content: ""; }
+    margin: 10mm 12mm;
   }
-  html, body { width: auto !important; height: auto !important; margin: 0 !important; background: #fff !important; }
-  body * { visibility: hidden !important; }
-  #lab-report-print, #lab-report-print * { visibility: visible !important; }
-  #pharmacy-print-root, #confirmation-print, #invoice-print-root, .pharmacy-print-document, .invoice-print-document { display: none !important; }
-  #lab-report-print {
+
+  html, body {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #111111 !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #root {
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  /* Universal hide for non-print interactive chrome */
+  .no-print,
+  .print\:hidden,
+  .cp-print-hide,
+  nav,
+  aside,
+  button,
+  input,
+  select,
+  textarea {
+    display: none !important;
+  }
+
+  /* Selective visibility based on data-careplus-printing */
+  body[data-careplus-printing] * {
+    visibility: hidden;
+  }
+
+  body[data-careplus-printing="careplus-print-root"] #careplus-print-root,
+  body[data-careplus-printing="careplus-print-root"] #careplus-print-root *,
+  body[data-careplus-printing="confirmation-print"] #confirmation-print,
+  body[data-careplus-printing="confirmation-print"] #confirmation-print *,
+  body[data-careplus-printing="admission-print-root"] #admission-print-root,
+  body[data-careplus-printing="admission-print-root"] #admission-print-root *,
+  body[data-careplus-printing="pharmacy-print-root"] #pharmacy-print-root,
+  body[data-careplus-printing="pharmacy-print-root"] #pharmacy-print-root *,
+  body[data-careplus-printing="pharmacy-print-root"] .pharmacy-print-document,
+  body[data-careplus-printing="pharmacy-print-root"] .pharmacy-print-document *,
+  body[data-careplus-printing="invoice-print-root"] #invoice-print-root,
+  body[data-careplus-printing="invoice-print-root"] #invoice-print-root *,
+  body[data-careplus-printing="lab-report-print"] #lab-report-print,
+  body[data-careplus-printing="lab-report-print"] #lab-report-print *,
+  body[data-careplus-printing="ultrasound-print-root"] #ultrasound-print-root,
+  body[data-careplus-printing="ultrasound-print-root"] #ultrasound-print-root * {
+    visibility: visible !important;
+  }
+
+  /* Fallback when window.print() or Ctrl+P is triggered directly */
+  body:not([data-careplus-printing]) * {
+    visibility: hidden;
+  }
+
+  body:not([data-careplus-printing]) #careplus-print-root,
+  body:not([data-careplus-printing]) #careplus-print-root *,
+  body:not([data-careplus-printing]) #confirmation-print,
+  body:not([data-careplus-printing]) #confirmation-print *,
+  body:not([data-careplus-printing]) #admission-print-root,
+  body:not([data-careplus-printing]) #admission-print-root *,
+  body:not([data-careplus-printing]) #pharmacy-print-root,
+  body:not([data-careplus-printing]) #pharmacy-print-root *,
+  body:not([data-careplus-printing]) .pharmacy-print-document,
+  body:not([data-careplus-printing]) .pharmacy-print-document *,
+  body:not([data-careplus-printing]) #invoice-print-root,
+  body:not([data-careplus-printing]) #invoice-print-root *,
+  body:not([data-careplus-printing]) #lab-report-print,
+  body:not([data-careplus-printing]) #lab-report-print *,
+  body:not([data-careplus-printing]) #ultrasound-print-root,
+  body:not([data-careplus-printing]) #ultrasound-print-root * {
+    visibility: visible !important;
+  }
+
+  /* Standard static positioning for natural multi-page flow without clipping */
+  #careplus-print-root,
+  #admission-print-root,
+  #pharmacy-print-root,
+  .pharmacy-print-document,
+  #invoice-print-root,
+  #lab-report-print,
+  #ultrasound-print-root {
     display: block !important;
     position: absolute !important;
-    inset: 0 auto auto 0 !important;
+    left: 0 !important;
+    top: 0 !important;
     width: 100% !important;
     margin: 0 !important;
+    padding: 0 !important;
     overflow: visible !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
     border: 0 !important;
     border-radius: 0 !important;
-    padding: 0 !important;
-    color: #17212b !important;
-    background: #fff !important;
-    box-shadow: none !important;
   }
-  .lab-report-header, .lab-report-patient, .lab-report-results, .lab-report-remarks, .lab-report-footer { position: relative !important; z-index: 1; }
-  .lab-report-header { grid-template-columns: auto 1fr; }
-  .lab-report-logo { width: 45px; height: 45px; }
-  .lab-report-brand h1 { color: #0e5c56 !important; font-size: 17px; }
-  .lab-report-patient { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .lab-report-custom-header, .lab-report-custom-footer { white-space: pre-wrap !important; }
-  .lab-report-table tr { break-inside: avoid; }
-  .lab-report-table .is-abnormal { color: #9a4f00 !important; font-weight: 700 !important; }
-  .lab-report-table .is-critical { color: #a51e1e !important; }
-  .lab-report-footer { break-inside: avoid; }
-  .lab-report-page-number { display: none !important; }
+
+  /* Booking Slip Center Flow */
+  #confirmation-print {
+    display: block !important;
+    position: static !important;
+    max-width: 140mm !important;
+    margin: 8mm auto !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 8px !important;
+    overflow: visible !important;
+  }
+
+  /* Thermal receipt layout */
+  .pharmacy-print-receipt {
+    width: 72mm !important;
+    margin: 0 auto !important;
+  }
+
+  /* Lab watermark */
   .lab-report-watermark {
     display: block !important;
     position: fixed !important;
@@ -518,7 +813,27 @@
     white-space: nowrap;
     pointer-events: none;
   }
-  .lab-report-sheet, .lab-report-sheet * { animation: none !important; box-shadow: none !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-  .lab-report-table th { background: #e8f2ef !important; }
-  body > *:not(#root) { display: none !important; }
+
+  /* Prevent page-breaks inside tables, rows, and cards */
+  tr,
+  thead,
+  .invoice-print-header,
+  .invoice-print-patient,
+  .invoice-print-totals,
+  .invoice-print-footer,
+  .lab-report-header,
+  .lab-report-patient,
+  .lab-report-footer,
+  .ultrasound-print-header,
+  .ultrasound-print-patient,
+  .ultrasound-print-footer,
+  .careplus-print-header,
+  .careplus-print-footer,
+  .careplus-print-section,
+  .admission-print-header,
+  .admission-print-footer,
+  .confirmation-print-header {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
 }

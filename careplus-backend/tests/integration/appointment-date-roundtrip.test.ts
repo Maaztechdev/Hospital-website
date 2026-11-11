@@ -80,6 +80,7 @@ describe("appointment date-only persistence", () => {
         WHERE id = ${created.id}
       `;
       expect(databaseRecord).toEqual({ appointmentDate: APPOINTMENT_DATE, timeSlot: TIME_SLOT });
+      expect(created.gender).toBe(patient.gender);
     } finally {
       if (appointmentId) {
         await prisma.auditLog.deleteMany({ where: { entityType: "Appointment", entityId: appointmentId } });
@@ -87,6 +88,8 @@ describe("appointment date-only persistence", () => {
         await prisma.appointment.deleteMany({ where: { id: appointmentId } });
       }
       await prisma.appointmentTokenSequence.deleteMany({ where: { doctorId: doctor.id } });
+      await prisma.invoiceItem.deleteMany({ where: { invoice: { patientId: patient.id } } });
+      await prisma.invoice.deleteMany({ where: { patientId: patient.id } });
       await prisma.patient.deleteMany({ where: { id: patient.id } });
       await prisma.doctor.deleteMany({ where: { id: doctor.id } });
       await prisma.user.deleteMany({ where: { id: doctorUser.id } });

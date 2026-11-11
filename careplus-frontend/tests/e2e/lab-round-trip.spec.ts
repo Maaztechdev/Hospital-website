@@ -55,6 +55,7 @@ test("Lab order survives the complete backend round trip and reload", async ({ p
     }
   }
   const resultPayload = parameters.length ? { parameters: values, technicianNotes: "Round trip test", reportRemarks: "Round trip printed remark" } : { resultValue: "5.4", unit: "mmol/L", referenceRange: "3.9 - 5.5", interpretation: "NORMAL" as const, technicianNotes: "Round trip test", reportRemarks: "Round trip printed remark" }
+  const expectedReportRemarks = parameters.length ? "Version two" : "Round trip printed remark"
   const resultResponse = await request.post(`${apiBase}/lab/orders/${order.id}/results`, { headers, data: resultPayload })
   expect(resultResponse.ok()).toBeTruthy()
   if (parameters.length) {
@@ -66,7 +67,10 @@ test("Lab order survives the complete backend round trip and reload", async ({ p
     expect(orderWithHistory.results).toHaveLength(2)
     expect(orderWithHistory.results.filter((item: { supersededById?: string | null }) => !item.supersededById)).toHaveLength(1)
   }
-  const verifyResponse = await request.post(`${apiBase}/lab/orders/${order.id}/verify`, { headers })
+  const currentOrder = await apiGet(request, `/lab/orders/${order.id}`, token)
+  const latestResult = currentOrder.results?.find((item: { supersededById?: string | null }) => !item.supersededById) || currentOrder.results?.[0]
+  const expectedUpdatedAt = latestResult?.amendedAt || latestResult?.createdAt || new Date().toISOString()
+  const verifyResponse = await request.post(`${apiBase}/lab/orders/${order.id}/verify`, { headers, data: { expectedUpdatedAt } })
   expect(verifyResponse.ok()).toBeTruthy()
   const verifiedOrder = (await verifyResponse.json()).data
   expect(verifiedOrder.verifiedBy).toBeTruthy()
@@ -74,6 +78,10 @@ test("Lab order survives the complete backend round trip and reload", async ({ p
   expect(verifiedOrder.verifier.name).toBeTruthy()
   const attachmentResponse = await request.post(`${apiBase}/lab/orders/${order.id}/attachments`, { headers, multipart: { file: { name: "lab-round-trip.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\nE2E lab report") } } })
   expect(attachmentResponse.ok(), await attachmentResponse.text()).toBeTruthy()
+  const uploadedAttachment = (await attachmentResponse.json()).data as { originalFilename: string }
+  expect(uploadedAttachment.originalFilename).toBe("lab-round-trip.pdf")
+  const orderWithAttachment = await apiGet(request, `/lab/orders/${order.id}`, token)
+  expect(orderWithAttachment.attachments.some((item: { originalFilename: string }) => item.originalFilename === "lab-round-trip.pdf")).toBeTruthy()
 
   await page.goto("/dashboard/login")
   await page.evaluate((tokens) => {
@@ -88,8 +96,8 @@ test("Lab order survives the complete backend round trip and reload", async ({ p
   await expect(page.getByText(new RegExp(`Verified by ${verifiedOrder.verifier.name}`))).toBeVisible()
   if (parameters.length) await expect(page.getByText(parameters[0].resultType === "NUMERIC" ? String(Number(values[0].value) + 0.01) : "Observed v2", { exact: true }).first()).toBeVisible()
   else await expect(page.getByText("5.4", { exact: true })).toBeVisible()
-  await expect(page.getByText("Report remarks: Version two", { exact: true })).toBeVisible()
-  await expect(page.getByText("Attached report: lab-round-trip.pdf", { exact: true })).toBeVisible()
+  await page.getByRole("tab", { name: "History", exact: true }).click()
+  await expect(page.getByText(`Report remarks: ${expectedReportRemarks}`, { exact: true })).toBeVisible()
   await page.reload()
   await expect(page.getByText("Verified", { exact: true }).last()).toBeVisible()
   if (!parameters.length) await expect(page.getByText("5.4", { exact: true })).toBeVisible()

@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useParams } from "react-router-dom"
-import { Printer, Wallet, Ban } from "lucide-react"
-import { DashboardPageHeader, NotPermitted } from "@/dashboard/components/Layout"
+import { Printer, Wallet, Ban, RotateCcw } from "lucide-react"
+import { DashboardPageHeader } from "@/dashboard/components/Layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -12,37 +12,74 @@ import { StatusBadge } from "@/dashboard/components/StatusBadge"
 import { useDashboard } from "@/dashboard/store/DashboardContext"
 import type { Payment } from "@/dashboard/types"
 import { formatCurrency, formatDateTime } from "@/dashboard/lib/format"
-import { api, toInvoice } from "@/lib/api"
+import { api, toInvoice, type ApiRefundInput } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { apiAssetUrl, useHospitalProfile } from "@/lib/hospitalProfile"
 import { displayPakistaniPhone } from "@/dashboard/lib/format"
+import { printElement } from "@/lib/print"
+import { InvoiceReceiptPrint } from "@/dashboard/pages/billing/InvoiceReceiptPrint"
 
 export default function InvoiceDetail() {
   const { invoiceId } = useParams()
   const { invoices, patients, dispatch, currentUser } = useDashboard()
   const { toast } = useToast()
   const profile = useHospitalProfile()
-  const invoice = invoices.find((i) => i.id === invoiceId)
+  const cachedInvoice = invoices.find((i) => i.id === invoiceId)
+  const [loadedInvoice, setLoadedInvoice] = React.useState<typeof cachedInvoice>(undefined)
+  const [detailLoading, setDetailLoading] = React.useState(true)
+  const [detailError, setDetailError] = React.useState("")
+  const [detailLoadVersion, setDetailLoadVersion] = React.useState(0)
+  const invoice = loadedInvoice ?? cachedInvoice
   const [paymentOpen, setPaymentOpen] = React.useState(false)
   const [voidOpen, setVoidOpen] = React.useState(false)
+  const [refundOpen, setRefundOpen] = React.useState(false)
   const [amount, setAmount] = React.useState("")
+  const [paymentReference, setPaymentReference] = React.useState("")
+  const [refundAmount, setRefundAmount] = React.useState("")
+  const [refundMethod, setRefundMethod] = React.useState<Payment["method"]>("Cash")
+  const [refundReference, setRefundReference] = React.useState("")
   const [method, setMethod] = React.useState<Payment["method"]>("Cash")
   const [printMode, setPrintMode] = React.useState<"invoice" | "receipt">("invoice")
   const [notes, setNotes] = React.useState("")
   const [paymentSubmitting, setPaymentSubmitting] = React.useState(false)
+  const [refundSubmitting, setRefundSubmitting] = React.useState(false)
   const paymentSubmittingRef = React.useRef(false)
 
   React.useEffect(() => {
     if (!invoiceId) return
+    let active = true
+    setDetailLoading(true)
+    setDetailError("")
     api.getInvoice(invoiceId).then((fresh) => {
-      dispatch({ type: "UPSERT_INVOICE", invoice: toInvoice(fresh, patients.find((patient) => patient.id === fresh.patientId)) })
-    }).catch((cause) => toast({ title: "Unable to refresh invoice", description: cause instanceof Error ? cause.message : "Please try again.", variant: "error" }))
-  }, [invoiceId, dispatch, patients, toast])
+      if (!active) return
+      const mapped = toInvoice(fresh, patients.find((patient) => patient.id === fresh.patientId))
+      setLoadedInvoice(mapped)
+      dispatch({ type: "UPSERT_INVOICE", invoice: mapped })
+    }).catch((cause) => {
+      if (!active) return
+      const message = cause instanceof Error ? cause.message : "Please try again."
+      setDetailError(message)
+      toast({ title: "Unable to load invoice", description: message, variant: "error" })
+    }).finally(() => { if (active) setDetailLoading(false) })
+    return () => { active = false }
+  }, [invoiceId, dispatch, patients, toast, detailLoadVersion])
 
-  if (!invoice) return <NotPermitted />
+  if (!invoice || detailError) {
+    return (
+      <div className="flex flex-col gap-4">
+        <DashboardPageHeader title="Invoice details" />
+        {detailLoading
+          ? <p role="status" className="rounded-lg border border-[var(--cp-border)] p-4 text-sm text-[var(--cp-ink-soft)]">Loading invoice…</p>
+          : <div role="alert" className="rounded-lg border border-[var(--cp-critical)] bg-[var(--cp-critical-light)] p-4 text-sm text-[var(--cp-critical)]">
+            <p>{detailError || "Invoice not found."}</p>
+            <Button className="mt-3" size="sm" variant="outline" onClick={() => setDetailLoadVersion((version) => version + 1)}>Retry</Button>
+          </div>}
+      </div>
+    )
+  }
   const patient = patients.find((p) => p.mrNumber === invoice.mrNumber)
   const total = invoice.grandTotal ?? invoice.lineItems.reduce((s, li) => s + li.qty * li.unitPrice - li.discount, 0)
-  const paid = invoice.paidAmount ?? invoice.payments.reduce((s, p) => s + p.amount, 0)
+  const paid = invoice.paidAmount ?? invoice.payments.reduce((s, p) => s + (p.type === "REFUND" ? -p.amount : p.amount), 0)
   const balance = invoice.balanceAmount ?? total - paid
   const printStatus = invoice.status === "Paid" ? "PAID" : invoice.status === "Partial" ? "PARTIAL" : invoice.status === "Void" ? "VOID" : "UNPAID"
   const subtotal = invoice.lineItems.reduce((sum, item) => sum + item.qty * item.unitPrice, 0)
@@ -55,9 +92,19 @@ export default function InvoiceDetail() {
       : amountNumber > balance
         ? `Amount cannot exceed the remaining balance of ${formatCurrency(balance)}.`
         : ""
+  const refundableAmount = Math.max(0, invoice.payments.reduce((sum, payment) => sum + (payment.type === "REFUND" ? -payment.amount : payment.amount), 0))
+  const refundAmountNumber = Number(refundAmount)
+  const refundAmountError = !refundAmount.trim()
+    ? "Enter an amount greater than zero."
+    : !Number.isFinite(refundAmountNumber) || refundAmountNumber <= 0
+      ? "Amount must be greater than zero."
+      : refundAmountNumber > refundableAmount
+        ? `Refund cannot exceed the amount paid: ${formatCurrency(refundableAmount)}.`
+        : ""
   const isLabInvoice = invoice.lineItems.some((item) => item.category === "Lab")
-  const canVoidInvoice = currentUser?.role === "admin" || (currentUser?.role === "billing_manager" && !isLabInvoice)
-  const receiptPayment = invoice.payments.at(-1)
+  const canVoidInvoice = currentUser?.role === "admin" || currentUser?.role === "billing_manager"
+  const canRefundInvoice = canVoidInvoice
+  const receiptPayment = invoice.payments[invoice.payments.length - 1]
 
   // Patient-wide ledger
   const patientInvoices = invoices.filter((i) => i.mrNumber === invoice.mrNumber)
@@ -71,11 +118,18 @@ export default function InvoiceDetail() {
     paymentSubmittingRef.current = true
     setPaymentSubmitting(true)
     try {
-      const updated = await api.recordPayment(invoice!.id, { paymentMethod: method.toUpperCase().replace(" ", "_") as "CASH" | "CARD" | "BANK_TRANSFER" | "MOBILE_WALLET" | "ONLINE", amount: n, notes: notes || undefined })
+      const updated = await api.recordPayment(invoice!.id, {
+        paymentMethod: method.toUpperCase().replace(" ", "_") as "CASH" | "CARD" | "BANK_TRANSFER" | "MOBILE_WALLET" | "ONLINE",
+        amount: n,
+        referenceNumber: paymentReference.trim() || undefined,
+        notes: notes || undefined,
+      })
       const fresh = await api.getInvoice(updated.id)
-      dispatch({ type: "UPSERT_INVOICE", invoice: toInvoice(fresh, patient) })
+      const mapped = toInvoice(fresh, patient)
+      setLoadedInvoice(mapped)
+      dispatch({ type: "UPSERT_INVOICE", invoice: mapped })
       toast({ title: "Payment received", description: `${formatCurrency(n)} via ${method}.`, variant: "success" })
-      setPaymentOpen(false); setAmount(""); setNotes("")
+      setPaymentOpen(false); setAmount(""); setPaymentReference(""); setNotes("")
     } catch (error) {
       toast({ title: "Unable to record payment", description: error instanceof Error ? error.message : "Please try again.", variant: "error" })
     } finally {
@@ -89,7 +143,9 @@ export default function InvoiceDetail() {
     try {
       const updated = await api.voidInvoice(invoice!.id, reason)
       const fresh = await api.getInvoice(updated.id)
-      dispatch({ type: "UPSERT_INVOICE", invoice: toInvoice(fresh, patient) })
+      const mapped = toInvoice(fresh, patient)
+      setLoadedInvoice(mapped)
+      dispatch({ type: "UPSERT_INVOICE", invoice: mapped })
       toast({ title: "Invoice voided", description: "Marked void with an audit trail entry. Not deleted.", variant: "info" })
       setVoidOpen(false)
     } catch (error) {
@@ -97,12 +153,53 @@ export default function InvoiceDetail() {
     }
   }
 
-  function print(mode: "invoice" | "receipt") {
-    setPrintMode(mode)
-    window.setTimeout(() => {
-      window.print()
+  async function refundInvoice(reason?: string) {
+    if (!reason || refundAmountError || !canRefundInvoice) return
+    setRefundSubmitting(true)
+    const payload: ApiRefundInput = {
+      paymentMethod: refundMethod.toUpperCase().replace(" ", "_") as ApiRefundInput["paymentMethod"],
+      amount: refundAmountNumber,
+      reason,
+      referenceNumber: refundReference.trim() || undefined,
+    }
+    try {
+      const updated = await api.refundInvoice(invoice!.id, payload)
+      const fresh = await api.getInvoice(updated.id)
+      const mapped = toInvoice(fresh, patient)
+      setLoadedInvoice(mapped)
+      dispatch({ type: "UPSERT_INVOICE", invoice: mapped })
+      toast({ title: "Refund recorded", description: `${formatCurrency(refundAmountNumber)} refunded.`, variant: "success" })
+      setRefundOpen(false)
+      setRefundAmount("")
+      setRefundReference("")
+    } catch (error) {
+      toast({ title: "Unable to refund invoice", description: error instanceof Error ? error.message : "Please try again.", variant: "error" })
+    } finally {
+      setRefundSubmitting(false)
+    }
+  }
+
+  async function print(mode: "invoice" | "receipt") {
+    if (mode === "receipt") {
+      try {
+        await printElement("pharmacy-print-root", {
+          title: `Receipt-${invoice!.invoiceNumber ?? ""}`,
+        })
+      } catch (error) {
+        toast({ title: "Unable to print receipt", description: error instanceof Error ? error.message : "Please try again.", variant: "error" })
+      }
+      return
+    }
+    setPrintMode("invoice")
+    try {
+      await printElement("invoice-print-root", {
+        title: `Invoice-${invoice!.invoiceNumber ?? ""}`,
+        afterPrint: () => setPrintMode("invoice"),
+      })
+    } catch (error) {
       setPrintMode("invoice")
-    }, 50)
+      toast({ title: "Unable to print invoice", description: error instanceof Error ? error.message : "Please try again.", variant: "error" })
+    }
   }
 
   return (
@@ -119,6 +216,9 @@ export default function InvoiceDetail() {
             {invoice.status !== "Void" && canVoidInvoice && (
               <Button variant="emergency" size="sm" onClick={() => setVoidOpen(true)}><Ban className="h-4 w-4" /> Void Invoice</Button>
             )}
+            {invoice.status !== "Void" && canRefundInvoice && refundableAmount > 0 && (
+              <Button variant="outline" size="sm" onClick={() => { setRefundAmount(String(refundableAmount)); setRefundOpen(true) }}><RotateCcw className="h-4 w-4" /> Refund</Button>
+            )}
           </>
         }
       />
@@ -133,6 +233,7 @@ export default function InvoiceDetail() {
               {profile.phone && <p>{profile.phone}</p>}
               {profile.registrationNo && <p>{profile.registrationNo}</p>}
             </div>
+            {receiptPayment && <InvoiceReceiptPrint invoice={invoice} payment={receiptPayment} />}
             <span className={`invoice-print-status invoice-print-status-${printStatus.toLowerCase()}`}>{printStatus}</span>
           </header>
 
@@ -190,8 +291,19 @@ export default function InvoiceDetail() {
             <h2>Payment History</h2>
             {invoice.payments.length > 0 ? (
               <table className="invoice-print-items invoice-print-payment-table">
-                <thead><tr><th>Date</th><th className="number">Amount</th><th>Method</th><th>Received By</th><th>Notes</th></tr></thead>
-                <tbody>{invoice.payments.map((payment) => <tr key={payment.id}><td>{formatDateTime(payment.date)}</td><td className="number">{formatCurrency(payment.amount)}</td><td>{payment.method}</td><td>{payment.receivedBy ?? "—"}</td><td>{payment.notes ?? "—"}</td></tr>)}</tbody>
+                <thead><tr><th>Date</th><th>Type</th><th className="number">Amount</th><th>Method</th><th>Received By</th><th>Notes</th></tr></thead>
+                <tbody>
+                  {invoice.payments.map((payment) => (
+                    <tr key={payment.id}>
+                      <td>{formatDateTime(payment.date)}</td>
+                      <td>{payment.type === "REFUND" ? "Refund" : "Payment"}</td>
+                      <td className="number">{formatCurrency(payment.amount)}</td>
+                      <td>{payment.method}</td>
+                      <td>{payment.receivedBy ?? "—"}</td>
+                      <td>{[payment.referenceNumber, payment.reason, payment.notes].filter(Boolean).join(" · ") || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
               </table>
             ) : <p>No payments recorded.</p>}
           </section>
@@ -257,20 +369,21 @@ export default function InvoiceDetail() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="border-b border-[var(--cp-border)] text-left text-xs uppercase text-[var(--cp-ink-faint)]">
-                  <th className="py-2 pr-4">Date</th><th className="pr-4">Amount</th><th className="pr-4">Method</th><th className="pr-4">Received By</th><th>Notes</th>
+                  <th className="py-2 pr-4">Date</th><th className="pr-4">Amount</th><th className="pr-4">Method</th><th className="pr-4">Received By</th><th className="pr-4">Status</th><th>Notes</th>
                 </tr>
               </thead>
               <tbody>
                 {invoice.payments.map((payment) => (
                   <tr key={payment.id} className="border-b border-[var(--cp-border)] last:border-0">
                     <td className="py-2 pr-4">{formatDateTime(payment.date)}</td>
-                    <td className="cp-tabular pr-4 font-semibold">{formatCurrency(payment.amount)}</td>
+                    <td className="cp-tabular pr-4 font-semibold">{payment.type === "REFUND" ? `-${formatCurrency(payment.amount)}` : formatCurrency(payment.amount)}</td>
                     <td className="pr-4">{payment.method}</td>
                     <td className="pr-4">{payment.receivedBy ?? "—"}</td>
-                    <td>{payment.notes ?? "—"}</td>
+                    <td className={`pr-4 font-medium ${payment.reversed || payment.type === "REFUND" ? "text-[var(--cp-critical)]" : "text-[var(--cp-success)]"}`}>{payment.reversed ? "Reversed" : payment.type === "REFUND" ? "Refunded" : "Collected"}</td>
+                    <td>{[payment.referenceNumber, payment.reason, payment.notes].filter(Boolean).join(" · ") || "—"}</td>
                   </tr>
                 ))}
-                {invoice.payments.length === 0 && <tr><td colSpan={5} className="py-3 text-[var(--cp-ink-soft)]">No payments recorded yet.</td></tr>}
+                {invoice.payments.length === 0 && <tr><td colSpan={6} className="py-3 text-[var(--cp-ink-soft)]">No payments recorded yet.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -304,16 +417,18 @@ export default function InvoiceDetail() {
         <p className="mb-3 rounded-lg bg-[var(--cp-bg)] px-3 py-2 text-sm text-[var(--cp-ink-soft)]">
           Current balance: <strong className="cp-tabular text-[var(--cp-ink)]">{formatCurrency(balance)}</strong>
         </p>
-        <Label>Amount</Label>
-        <Input type="number" min="0" max={balance} step="any" className="cp-tabular" value={amount} aria-invalid={Boolean(amountError)} aria-describedby={amountError ? "payment-amount-error" : undefined} onChange={(e) => setAmount(e.target.value)} />
+        <Label htmlFor="payment-amount">Amount</Label>
+        <Input id="payment-amount" type="number" min="0" max={balance} step="any" className="cp-tabular" value={amount} aria-invalid={Boolean(amountError)} aria-describedby={amountError ? "payment-amount-error" : undefined} onChange={(e) => setAmount(e.target.value)} />
         {amountError && <p id="payment-amount-error" role="alert" className="mt-1 text-xs text-[var(--cp-critical)]">{amountError}</p>}
         <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => setAmount(String(balance))}>Full balance</Button>
-        <Label className="mt-3">Method</Label>
-        <Select value={method} onChange={(e) => setMethod(e.target.value as Payment["method"])}>
+        <Label className="mt-3" htmlFor="payment-method">Method</Label>
+        <Select id="payment-method" value={method} onChange={(e) => setMethod(e.target.value as Payment["method"])}>
           <option>Cash</option><option>Card</option><option>Bank Transfer</option><option>Mobile Wallet</option><option>Online</option>
         </Select>
-        <Label className="mt-3">Notes (optional)</Label>
-        <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
+        <Label className="mt-3" htmlFor="payment-reference">Reference (optional)</Label>
+        <Input id="payment-reference" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} />
+        <Label className="mt-3" htmlFor="payment-notes">Notes (optional)</Label>
+        <Input id="payment-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         <div className="mt-5 flex justify-end gap-2 border-t border-[var(--cp-border)] pt-4">
           <Button variant="outline" size="sm" onClick={() => setPaymentOpen(false)}>Cancel</Button>
           <Button size="sm" disabled={paymentSubmitting || Boolean(amountError)} onClick={receivePayment}>{paymentSubmitting ? "Recording..." : "Confirm Payment"}</Button>
@@ -331,6 +446,30 @@ export default function InvoiceDetail() {
         requireReason
         reasonLabel="Reason for voiding"
       />
+      <ConfirmDialog
+        open={refundOpen}
+        onClose={() => { if (!refundSubmitting) setRefundOpen(false) }}
+        onConfirm={refundInvoice}
+        title="Refund this invoice?"
+        description={`Refunds are recorded as a new payment row. Up to ${formatCurrency(refundableAmount)} can be refunded.`}
+        confirmLabel={refundSubmitting ? "Recording refund…" : "Record Refund"}
+        destructive
+        requireReason
+        reasonLabel="Reason for refund"
+        confirmDisabled={refundSubmitting || Boolean(refundAmountError)}
+      >
+        <div className="flex flex-col gap-2">
+          <Label>Refund amount</Label>
+          <Input type="number" min="0" max={refundableAmount} step="any" value={refundAmount} onChange={(event) => setRefundAmount(event.target.value)} aria-invalid={Boolean(refundAmountError)} />
+          {refundAmountError && <p role="alert" className="text-xs text-[var(--cp-critical)]">{refundAmountError}</p>}
+          <Label className="mt-2">Method</Label>
+          <Select value={refundMethod} onChange={(event) => setRefundMethod(event.target.value as Payment["method"])}>
+            <option>Cash</option><option>Card</option><option>Bank Transfer</option><option>Mobile Wallet</option><option>Online</option>
+          </Select>
+          <Label className="mt-2">Reference (optional)</Label>
+          <Input value={refundReference} onChange={(event) => setRefundReference(event.target.value)} />
+        </div>
+      </ConfirmDialog>
     </div>
   )
 }

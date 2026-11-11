@@ -25,7 +25,7 @@ const profileUpload = multer({
  *       200: { description: OK }
  */
 router.get("/", requireRole(["ADMIN"]), validate({ query: listUsersQuerySchema }), usersController.list);
-router.get("/ultrasound-staff", requireRole(["ADMIN", "ULTRASOUND_TECH", "ULTRASOUND_TECHNICIAN", "RADIOLOGIST"]), usersController.listUltrasoundStaff);
+router.get("/ultrasound-staff", requireRole(["ADMIN", "DOCTOR", "RECEPTIONIST", "ULTRASOUND_TECH", "ULTRASOUND_TECHNICIAN", "RADIOLOGIST"]), usersController.listUltrasoundStaff);
 
 router.get("/me/profile", (req, _res, next) => { if (req.user) req.params.id = req.user.sub; next(); }, usersController.getProfile);
 router.patch("/me/profile", profileUpload.fields([{ name: "profilePicture", maxCount: 1 }, { name: "signature", maxCount: 1 }, { name: "stamp", maxCount: 1 }]), (req, _res, next) => { if (req.user) req.params.id = req.user.sub; next(); }, usersController.updateProfile);
@@ -62,5 +62,16 @@ router.patch(
  *       200: { description: OK }
  */
 router.post("/:id/deactivate", requireRole(["ADMIN"]), validate({ params: idParamSchema }), usersController.deactivate);
+
+/**
+ * @openapi
+ * /users/{id}/unlock:
+ *   post:
+ *     tags: [Users]
+ *     summary: Unlock a user account locked by failed login attempts (admin only)
+ *     responses:
+ *       200: { description: OK }
+ */
+router.post("/:id/unlock", requireRole(["ADMIN"]), validate({ params: idParamSchema }), usersController.unlock);
 
 export default router;

@@ -221,7 +221,7 @@ router.put("/settings", requireRole(["ADMIN"]), validate({ body: pharmacySetting
 router.put("/settings/admin-pin", requireRole(["ADMIN"]), validate({ body: pharmacyAdminPinSchema }), pharmacyController.updatePharmacyAdminPin);
 router.post("/settings/logo", requireRole(["ADMIN"]), pharmacyLogoUpload.single("file"), pharmacyController.uploadPharmacyLogo);
 router.get("/categories", requireRole(["ADMIN", "PHARMACIST"]), pharmacyController.listMedicineCategories);
-router.get("/medicines", requireRole(["ADMIN", "PHARMACIST", "DOCTOR"]), validate({ query: listMedicinesQuerySchema }), pharmacyController.listMedicines);
+router.get("/medicines", requireRole(["ADMIN", "PHARMACIST", "DOCTOR", "NURSE"]), validate({ query: listMedicinesQuerySchema }), pharmacyController.listMedicines);
 router.post("/medicines", requireRole(["ADMIN", "PHARMACIST"]), validate({ body: createMedicineSchema }), pharmacyController.createMedicine);
 router.patch("/medicines/:id", requireRole(["ADMIN", "PHARMACIST"]), validate({ params: idParamSchema, body: updateMedicineSchema }), pharmacyController.updateMedicine);
 router.delete("/medicines/:id", requireRole(["ADMIN", "PHARMACIST"]), validate({ params: idParamSchema }), pharmacyController.archiveMedicine);

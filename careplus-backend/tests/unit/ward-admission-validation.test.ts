@@ -116,12 +116,26 @@ describe("Ward admission authorization and bed concurrency", () => {
     }
     if (patient || unrelatedPatient || concurrentPatient) {
       const patientIds = [patient?.id, unrelatedPatient?.id, concurrentPatient?.id].filter((id): id is string => Boolean(id));
+      const admissions = await prisma.admission.findMany({ where: { patientId: { in: patientIds } }, select: { id: true } });
+      const admissionIds = admissions.map((admission) => admission.id);
+      const invoices = await prisma.invoice.findMany({ where: { admissionId: { in: admissionIds } }, select: { id: true } });
+      const invoiceIds = invoices.map((invoice) => invoice.id);
+      const invoiceItems = await prisma.invoiceItem.findMany({ where: { invoiceId: { in: invoiceIds } }, select: { id: true } });
+      const payments = await prisma.payment.findMany({ where: { invoiceId: { in: invoiceIds } }, select: { id: true } });
+      await prisma.auditLog.deleteMany({
+        where: { entityId: { in: [...admissionIds, ...invoiceIds, ...invoiceItems.map((item) => item.id), ...payments.map((payment) => payment.id)] } },
+      });
       await prisma.patientLedgerEntry.deleteMany({ where: { patientId: { in: patientIds } } });
+      await prisma.payment.deleteMany({ where: { invoiceId: { in: invoiceIds } } });
+      await prisma.invoiceItem.deleteMany({ where: { invoiceId: { in: invoiceIds } } });
+      await prisma.invoice.deleteMany({ where: { id: { in: invoiceIds } } });
       await prisma.admission.deleteMany({ where: { patientId: { in: patientIds } } });
     }
     if (patient) await prisma.surgery.deleteMany({ where: { patientId: patient.id } });
     if (availableBed && occupiedBed && concurrentBed && ownPatientBed) {
-      await prisma.bed.deleteMany({ where: { id: { in: [availableBed.id, occupiedBed.id, concurrentBed.id, ownPatientBed.id] } } });
+      const bedIds = [availableBed.id, occupiedBed.id, concurrentBed.id, ownPatientBed.id];
+      await prisma.bedRateHistory.deleteMany({ where: { bedId: { in: bedIds } } });
+      await prisma.bed.deleteMany({ where: { id: { in: bedIds } } });
     }
     if (room) await prisma.room.delete({ where: { id: room.id } });
     if (ward) await prisma.ward.delete({ where: { id: ward.id } });

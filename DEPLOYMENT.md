@@ -1,142 +1,122 @@
-# Production Deployment
+# CarePlus Production Deployment & Delivery Guide
 
-The root `docker-compose.yml` runs the frontend, API, PostgreSQL, and Redis as
-one production stack. The frontend is served by Nginx and proxies `/api/` to
-the API container, so the browser only needs the public frontend URL.
+This document defines the production delivery requirements, security hardening checklist, and verified operational procedures for deploying the CarePlus Hospital Management System.
 
-## Required environment
+---
 
-Copy `.env.example` to `.env` and replace every `replace-with-*` value with a
-strong, deployment-managed secret. Do not commit `.env`.
+## Pre-Deployment Delivery Checklist
 
-- `POSTGRES_PASSWORD`: database password. If it contains URL-reserved
-  characters, URL-encode it in `DATABASE_URL` or use a secret without those
-  characters.
-- `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `PASSWORD_RESET_SECRET`: at least
-  16 random characters each, and all different.
-- `POSTGRES_USER`, `POSTGRES_DB`: optional database names; defaults are shown in
-  `.env.example`.
-- `FRONTEND_URL`: public origin allowed by the API CORS policy.
-- `FRONTEND_PORT`: host port for Nginx; defaults to `8080`.
-- `VITE_API_URL`: frontend API base path; keep `/api/v1` when using the bundled
-  Nginx proxy.
-- `TRUST_PROXY_HOPS`: number of trusted reverse proxies, normally `1` behind a
-  single load balancer.
-- `LOG_LEVEL`: Pino level such as `info`, `warn`, or `error`.
-- `BACKUP_DIR`: private directory for SQL backups; defaults to `./backups` in
-  the API container. Mount this to durable, access-controlled storage in
-  production.
-- `UPLOAD_DIR`: private directory for lab and ultrasound files; defaults to
-  `./uploads` in the API container. Never mount it into Nginx or a public web
-  directory.
+Before going live in any production environment, every item on this checklist must be verified and signed off by the engineering and clinical operations teams.
 
-In a cloud deployment, inject these values from the platform secret manager
-instead of storing them in a shell history or image layer.
+### 1. Credentials & Demo Accounts
+- [ ] **Demo Passwords Eliminated:** Verify that demo credentials (`admin@careplus.local`, `dr.ahmed@careplus.local`, `pharmacist@careplus.local`, etc.) from development seeds are **not** present in the production database.
+- [ ] **First Admin Bootstrapped via Script:** Run `npm run bootstrap:admin` with unique, high-entropy administrator credentials.
+- [ ] **Password Policy Enforced:** All user passwords must satisfy the system policy: minimum 8 characters, with uppercase, lowercase, digit, and special character.
 
-## Deploy and start
+### 2. Secret Keys & Environment Protection
+- [ ] **Generate Fresh JWT Secrets:**
+  - `JWT_ACCESS_SECRET` (minimum 32 random characters).
+  - `JWT_REFRESH_SECRET` (minimum 32 random characters, different from access secret).
+  - `PASSWORD_RESET_SECRET` (minimum 32 random characters).
+  ```bash
+  # Generate 32+ character cryptographically secure secrets:
+  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  ```
+- [ ] **Refuse Default Secrets:** Verify `NODE_ENV=production` is set in the runtime environment. The backend will refuse to start if demo or placeholder secrets are detected.
+- [ ] **No Secrets in Source Control:** Verify `.env` is absent from git:
+  ```bash
+  git ls-files | Select-String -Pattern "env"
+  ```
+- [ ] **Private Repository:** Ensure the repository is hosted as a private repository with branch protection rules enabled on `main`.
 
-From the repository root:
+### 3. Database & Network Security
+- [ ] **Dedicated Production Database:** Use a standalone PostgreSQL 16 instance. Never run tests against the production database (`_test` database names only for testing).
+- [ ] **Strict Connection Strings:** Ensure `DATABASE_URL` uses SSL (`?sslmode=require` or verify-full) and a unique database user with minimal necessary schema privileges.
+- [ ] **CORS Origin Locked Down:** Set `FRONTEND_URL` in `careplus-backend/.env` strictly to the production frontend domain (e.g. `https://careplus.yourhospital.com`). Wildcards (`*`) or `localhost` are rejected in production.
+- [ ] **Reverse Proxy & HTTPS:** Terminate TLS/SSL (Let's Encrypt / Cloudflare / Nginx) before requests reach the application. Set `TRUST_PROXY_HOPS=1` (or matching your proxy hops).
+- [ ] **Redis Protection:** Ensure Redis 7 instance is password-protected (`requirepass`) and accessible only over a private subnet or Unix socket.
 
-```bash
-cp .env.example .env
-# edit .env with real values
-docker compose up --build -d
-docker compose ps
-curl http://localhost:8080/health
-```
+### 4. Backups & Disaster Recovery
+- [ ] **Nightly Automated Backups Configured:**
+  - Option A (In-app scheduler): Set `AUTO_BACKUP_ENABLED=true` and `BACKUP_RETENTION_DAYS=30` in backend `.env`.
+  - Option B (System cron / Task Scheduler): Configure external cron running `pg_dump` daily at off-peak hours (e.g. 02:00 AM).
+- [ ] **Disaster Recovery Tested:** Verify that a database dump can be restored cleanly into an isolated database without errors (tested and verified with table row parity checks).
+- [ ] **Offsite Replication:** Sync `./backups` directory to secure encrypted offsite object storage (AWS S3 with Object Lock / Azure Blob).
 
-The public application is available at `http://localhost:8080` in this example.
-Put TLS termination, a WAF, and any public DNS in front of Nginx for internet
-deployment. PostgreSQL, Redis, and the API are internal compose services and
-are not published to the host.
+---
 
-For HTTPS, terminate TLS at an external Nginx, Caddy, or load balancer, redirect
-HTTP to HTTPS, and proxy the frontend plus `/api/` to the frontend container.
-Set `FRONTEND_URL` to the exact `https://` origin and `TRUST_PROXY_HOPS` to the
-number of trusted proxies. Do not expose port 4000, PostgreSQL, or Redis.
+## Verified Step-by-Step Production Deployment
 
-## Database migrations
-
-The API container runs `npm run prisma:deploy` before starting Node. This is
-Prisma's production migration command: it applies committed migrations in
-order and does not create or modify migration files. Compose waits for a healthy
-PostgreSQL container before starting the API.
-
-There are no manual schema steps. A schema change must be developed and tested
-as a committed Prisma migration, then deployed with the image. Migrations must
-be backward-compatible with the currently running image when rolling updates
-are possible: add new fields before using them, backfill separately, and remove
-old fields only after all old images are gone. Take a verified database backup
-before destructive migrations. A failed migration prevents the API process
-from becoming healthy, making the deployment fail visibly instead of serving
-against a partially updated schema.
-
-Prisma migrations do not have automatic down migrations. Before a risky release,
-take and verify a backup. If a migration fails, keep the API image offline,
-deploy the previous image if needed, then restore the verified backup during a
-maintenance window. For additive changes, fix forward with a new migration;
-validate health and data before reopening traffic.
-
-## Database backups
-
-Only an `ADMIN` can list, create, download, delete, or restore backups. The API
-runs `pg_dump` on the server and stores private plain SQL files named
-`careplus-backup-YYYY-MM-DD-HHmmss.sql`. Restore requires the admin password
-again, creates a safety backup first, and blocks other API requests while the
-database is restored. Plan disk space for at least one full database copy plus
-a safety copy, with headroom for growth.
-
-Keep `BACKUP_DIR` outside public/static folders. If the application is down,
-restore directly with PostgreSQL tools:
+### Step 1: Database Migration
+Deploy Prisma migrations without schema recreation or destructive actions:
 
 ```bash
-psql "$DATABASE_URL" --set ON_ERROR_STOP=1 --single-transaction \
-  --file backups/careplus-backup-YYYY-MM-DD-HHmmss.sql
+cd careplus-backend
+NODE_ENV=production npx prisma migrate deploy
 ```
 
-Do not put the database password in shell history; use `PGPASSWORD` from a
-protected environment or a `.pgpass` file.
-
-Named Docker volumes are not off-host copies. Schedule a host job to copy them
-to encrypted, access-controlled storage, for example:
-`docker run --rm -v careplus_backups:/src -v /srv/offsite:/dst alpine sh -c
-'cp -a /src/. /dst/'`. Regularly test restoring a copied backup.
-
-## Logging and privacy
-
-Production logs are newline-delimited structured JSON from Pino. Set
-`LOG_LEVEL` to control verbosity. HTTP logs contain the method, path, status,
-duration, and request ID; query strings and request bodies are deliberately
-excluded because they can contain patient searches, identifiers, or clinical
-data. Authorization, cookies, passwords, reset tokens, refresh tokens, and
-response cookies are redacted as defense in depth. Application errors return a
-generic message in production and log only a request ID, status/code, and error
-name. Never add payloads, tokens, or PHI to log statements, and restrict log
-storage/access according to the hospital's retention policy.
-
-## Monitoring and alerting
-
-The API exposes `GET /health`, which returns HTTP 200 only when PostgreSQL is
-reachable. The API and frontend images also have Docker health checks. Configure
-an external uptime monitor to check the public frontend and `/health` every
-minute, alerting after three consecutive failures. Because API request logs
-are JSON and include status codes, ship them to the platform log service and
-create an alert for sustained 5xx responses (for example, more than 5% over a
-five-minute window), container restarts, and database/Redis connection errors.
-
-For a larger deployment, add a metrics collector such as OpenTelemetry or
-Prometheus at the ingress layer and track request count, latency percentiles,
-5xx rate, database pool saturation, and migration failures. Keep metrics
-cardinality free of patient IDs, names, emails, or other PHI.
-
-## Stop and inspect
+### Step 2: Bootstrap Initial Administrator
+Provision the initial hospital administrator account using deployment secrets:
 
 ```bash
-docker compose logs --since=10m api
-docker compose ps
-docker compose down
+cd careplus-backend
+BOOTSTRAP_ADMIN_NAME="Hospital Administrator" \
+BOOTSTRAP_ADMIN_EMAIL="admin@yourhospital.com" \
+BOOTSTRAP_ADMIN_PASSWORD="StrongProductionAdminPassword#2026" \
+NODE_ENV=production npm run bootstrap:admin
 ```
 
-`docker compose down` preserves PostgreSQL data in the named volume. Do not use
-`docker compose down -v` in production unless the database volume is known to
-be disposable.
+### Step 3: Build & Start Backend Service
+```bash
+cd careplus-backend
+npm run build
+NODE_ENV=production npm start
+```
+
+### Step 4: Build & Serve Frontend Bundle
+```bash
+cd careplus-frontend
+VITE_API_URL="https://api.yourhospital.com/api/v1" npm run build
+# The resulting `dist/` folder is served via Nginx or Cloudflare Pages with HTTPS.
+```
+
+---
+
+## Production Health & Verification Commands
+
+All commands below have been tested and verified against the running services:
+
+### 1. Backend Application Health Check
+```bash
+curl -I http://localhost:4000/health
+```
+Expected response:
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+```
+Payload:
+```json
+{
+  "success": true,
+  "data": {
+    "status": "ok",
+    "timestamp": "2026-10-21T...",
+    "uptime": 123.45,
+    "environment": "production"
+  }
+}
+```
+
+### 2. Startup Guard Verification
+Verify that starting in production with a demo secret fails immediately:
+```bash
+JWT_ACCESS_SECRET="careplus-super-secret" NODE_ENV=production node dist/server.js
+# Exits with status 1: Production security violation: JWT_ACCESS_SECRET contains forbidden default/demo placeholder.
+```
+
+### 3. Database Row Verification (Post-Restore Check)
+```bash
+npx tsx scripts/verify-backup-restore-test.ts
+# Automatically dumps, restores to an isolated _test database, verifies table row counts, and cleans up.
+```

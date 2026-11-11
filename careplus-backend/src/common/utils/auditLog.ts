@@ -1,15 +1,17 @@
-import { AuditAction, Prisma } from "@prisma/client";
+import { AuditAction, Prisma, Role } from "@prisma/client";
 import { Request } from "express";
 import { prisma } from "@config/prisma";
 
 interface AuditEntryInput {
   userId?: string | null;
+  userRole?: Role | null;
   action: AuditAction;
   module: string;
   entityType: string;
   entityId?: string | null;
   oldValues?: unknown;
   newValues?: unknown;
+  reason?: string | null;
   req?: Request;
 }
 
@@ -55,12 +57,14 @@ export async function writeAuditLog(
   await tx.auditLog.create({
     data: {
       userId: input.userId ?? null,
+      userRole: input.userRole ?? input.req?.user?.role ?? null,
       action: input.action,
       module: input.module,
       entityType: input.entityType,
       entityId: input.entityId ?? null,
       oldValuesJson: sanitizeAuditValue(input.oldValues),
       newValuesJson: sanitizeAuditValue(input.newValues),
+      reason: input.reason ?? null,
       ipAddress: input.req?.ip ?? null,
       userAgent: input.req?.headers["user-agent"] ?? null,
     },

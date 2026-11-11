@@ -5,6 +5,7 @@ import { prisma } from "@config/prisma";
 import { env } from "@config/env";
 import { UnauthorizedError, LockedError, NotFoundError } from "@common/errors/AppError";
 import { writeAuditLog } from "@common/utils/auditLog";
+import { notifyRoles } from "@common/utils/notify";
 import {
   buildAccessTokenPayload,
   clearFailedLogins,
@@ -19,7 +20,9 @@ import {
   revokeAllUserRefreshTokens,
   createPasswordResetToken,
   consumePasswordResetToken,
+  verifyPasswordResetToken,
 } from "./token.utils";
+import { sendPasswordResetEmail } from "@common/utils/mailer";
 
 async function logAttempt(email: string, success: boolean, req: Request, userId?: string) {
   await prisma.authAttempt.create({
@@ -60,6 +63,16 @@ export const authService = {
     if (!user || user.deletedAt || !user.isActive) {
       await recordFailedLogin(lockKey, env.ACCOUNT_LOCKOUT_WINDOW_SECONDS);
       await logAttempt(email, false, req);
+      await writeAuditLog({
+        userId: user?.id ?? null,
+        action: "LOGIN_FAILED",
+        module: "auth",
+        entityType: "User",
+        entityId: user?.id ?? null,
+        reason: "Invalid email or inactive user",
+        newValues: { email },
+        req,
+      });
       throw new UnauthorizedError("Invalid email or password");
     }
 
@@ -67,7 +80,40 @@ export const authService = {
     if (!passwordValid) {
       const attempts = await recordFailedLogin(lockKey, env.ACCOUNT_LOCKOUT_WINDOW_SECONDS);
       await logAttempt(email, false, req, user.id);
+      await writeAuditLog({
+        userId: user.id,
+        action: "LOGIN_FAILED",
+        module: "auth",
+        entityType: "User",
+        entityId: user.id,
+        reason: "Incorrect password",
+        newValues: { email, failedAttempts: attempts },
+        req,
+      });
       if (attempts >= env.ACCOUNT_LOCKOUT_MAX_ATTEMPTS) {
+        if (attempts === env.ACCOUNT_LOCKOUT_MAX_ATTEMPTS) {
+          await writeAuditLog({
+            userId: user.id,
+            action: "STATUS_CHANGE",
+            module: "auth",
+            entityType: "User",
+            entityId: user.id,
+            newValues: { status: "LOCKED", email: user.email, failedAttempts: attempts, lockWindowSeconds: env.ACCOUNT_LOCKOUT_WINDOW_SECONDS },
+            req,
+          });
+          await notifyRoles(["ADMIN"], {
+            notificationType: "ACCOUNT_LOCKED",
+            title: "Security Alert: Account Locked",
+            message: `Account for ${user.name} (${user.email}) has been locked out after ${attempts} failed login attempts.`,
+            relatedEntityType: "User",
+            relatedEntityId: user.id,
+            variables: {
+              userName: user.name,
+              userEmail: user.email,
+              failedAttempts: attempts,
+            },
+          });
+        }
         throw new LockedError("Account locked due to too many failed attempts.");
       }
       throw new UnauthorizedError("Invalid email or password");
@@ -141,13 +187,28 @@ export const authService = {
     }
 
     const resetToken = await createPasswordResetToken(user.id);
+    const emailResult = await sendPasswordResetEmail(user.email, resetToken, user.name);
 
-    // In production this would be emailed. We return it here only in non-production
-    // environments to enable local/dev/test flows without an email provider.
     return {
       message: "If that account exists, a reset link has been sent.",
       ...(env.EXPOSE_DEV_RESET_TOKEN ? { devResetToken: resetToken } : {}),
+      deliveryMethod: emailResult.deliveryMethod,
     };
+  },
+
+  async verifyResetToken(token: string) {
+    const userId = await verifyPasswordResetToken(token);
+    if (!userId) {
+      throw new UnauthorizedError("Invalid or expired reset token");
+    }
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, name: true, deletedAt: true, isActive: true },
+    });
+    if (!user || user.deletedAt || !user.isActive) {
+      throw new UnauthorizedError("Invalid or expired reset token");
+    }
+    return { valid: true, email: user.email };
   },
 
   async resetPassword(token: string, newPassword: string) {

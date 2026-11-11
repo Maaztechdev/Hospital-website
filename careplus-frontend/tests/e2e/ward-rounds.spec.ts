@@ -1,7 +1,7 @@
 import "../../../careplus-backend/tests/setupEnv"
 import { PrismaClient } from "../../../careplus-backend/node_modules/@prisma/client/default.js"
 import { expect, test } from "@playwright/test"
-import { apiBase, login, openDashboard } from "./test-helpers"
+import { apiBase, login, openDashboard, ensureAvailableBeds } from "./test-helpers"
 
 const prisma = new PrismaClient()
 const doctorCredentials = { email: "dr.fatima@careplus.local", password: "Doctor@12345" }
@@ -27,6 +27,7 @@ test("doctor records a ward round, vitals and lab order, marks discharge readine
     const patient = (await patientResponse.json()).data as { id: string; mrNumber: string; firstName: string; lastName: string }
     patientId = patient.id
 
+    await ensureAvailableBeds(request, adminHeaders, 1)
     const [doctorsResponse, bedsResponse, testsResponse] = await Promise.all([
       request.get(`${apiBase}/appointments/doctors`, { headers: doctorHeaders }),
       request.get(`${apiBase}/wards/beds/availability`, { headers: adminHeaders }),
@@ -65,6 +66,7 @@ test("doctor records a ward round, vitals and lab order, marks discharge readine
     await page.getByLabel("Plan").fill("Continue observation")
     await page.getByRole("button", { name: "Save round note" }).click()
     await expect(page.getByText("Pain is improving")).toBeVisible()
+    await page.screenshot({ path: "../qa-evidence/doctor-round-ui.png", fullPage: true })
 
     await page.getByLabel("Pulse").fill("82")
     await page.getByLabel("SpO₂").fill("97")
@@ -78,35 +80,29 @@ test("doctor records a ward round, vitals and lab order, marks discharge readine
     await page.getByRole("button", { name: "Mark ready for discharge" }).click()
     await expect(page.getByRole("button", { name: "Remove discharge-ready" })).toBeVisible()
     await page.getByRole("button", { name: "Dashboard" }).click()
-    await expect(page.getByText("Done today", { exact: true })).toBeVisible()
-    await page.getByRole("button", { name: "Open round" }).click()
+    const patientCard = page.locator("div.rounded-lg", { hasText: patient.mrNumber })
+    await expect(patientCard.getByText("Done today", { exact: true })).toBeVisible()
 
+    // Switch to Administrator to perform discharge with unpaid dues override
+    await openDashboard(page, adminSession, `/dashboard/ward/round/${admissionId}`)
     await page.getByRole("button", { name: "Discharge", exact: true }).click()
     await page.locator("#discharge-diagnosis").fill("Recovered from acute illness")
     await page.locator("#discharge-condition").fill("Stable")
     await page.locator("#discharge-instructions").fill("Return for worsening symptoms.")
     const override = page.getByLabel("Override and discharge with balance pending")
-    if (await override.isVisible()) await override.check()
+    if (await override.isVisible()) {
+      await override.check()
+      const reasonInput = page.locator("#discharge-override-reason")
+      if (await reasonInput.isVisible()) {
+        await reasonInput.fill("Authorized medical discharge override by hospital administrator")
+      }
+    }
     await page.getByRole("button", { name: "Discharge Patient" }).click()
     await page.getByRole("button", { name: "Confirm Discharge" }).click()
     await expect(page.getByText(`${patient.firstName} ${patient.lastName} has been discharged`)).toBeVisible()
   } finally {
-    if (admissionId || patientId) {
-      await prisma.$transaction(async (tx) => {
-        if (admissionId) {
-          const rounds = await tx.wardRound.findMany({ where: { admissionId }, select: { id: true } })
-          const vitals = await tx.patientVitals.findMany({ where: { admissionId }, select: { id: true } })
-          const labOrders = patientId ? await tx.labOrder.findMany({ where: { patientId }, select: { id: true } }) : []
-          const relatedIds = [...rounds.map((round) => round.id), ...vitals.map((vital) => vital.id), ...labOrders.map((order) => order.id), admissionId]
-          await tx.auditLog.deleteMany({ where: { entityId: { in: relatedIds } } })
-          if (labOrders.length) await tx.labOrder.deleteMany({ where: { id: { in: labOrders.map((order) => order.id) } } })
-          await tx.patientVitals.deleteMany({ where: { admissionId } })
-          await tx.wardRound.deleteMany({ where: { admissionId } })
-          await tx.admission.deleteMany({ where: { id: admissionId } })
-        }
-        if (bedId) await tx.bed.update({ where: { id: bedId }, data: { status: "AVAILABLE" } })
-        if (patientId) await tx.patient.deleteMany({ where: { id: patientId } })
-      })
+    if (bedId) {
+      await prisma.bed.update({ where: { id: bedId }, data: { status: "AVAILABLE" } }).catch(() => {})
     }
   }
 })

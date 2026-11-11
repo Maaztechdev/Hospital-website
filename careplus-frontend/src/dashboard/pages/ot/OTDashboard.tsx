@@ -7,7 +7,7 @@ import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { OT_ROOMS } from "@/dashboard/data/wardData"
 import { ScheduleSurgeryModal } from "@/dashboard/pages/ot/ScheduleSurgeryModal"
 import { OT_STATUS_META } from "@/dashboard/pages/ot/otStatusMeta"
-import { formatDate, formatWeekday, getHospitalDateKey, getLocalDateKey } from "@/dashboard/lib/format"
+import { formatDate, formatTime, formatWeekday, getHospitalDateKey, getLocalDateKey } from "@/dashboard/lib/format"
 import { cn } from "@/lib/utils"
 import { api, type ApiOTSummary } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
@@ -65,10 +65,10 @@ export default function OTDashboard() {
       <div className="rounded-xl border border-[var(--cp-border)] bg-[var(--cp-surface)] p-4">
         <div className="mb-3 flex items-center justify-between">
           <p className="text-sm font-bold text-[var(--cp-ink)]">Week View — {formatDate(getLocalDateKey(weekStart))} to {formatDate(getLocalDateKey(days[6]))}</p>
-          <div className="flex items-center gap-1">
-            <button onClick={() => setWeekAnchor((d) => { const n = new Date(d); n.setDate(n.getDate() - 7); return n })} className="rounded-lg p-1.5 text-[var(--cp-ink-soft)] hover:bg-[var(--cp-bg)]"><ChevronLeft className="h-4 w-4" /></button>
-            <button onClick={() => setWeekAnchor(new Date())} className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--cp-primary)] hover:bg-[var(--cp-primary-light)]">Today</button>
-            <button onClick={() => setWeekAnchor((d) => { const n = new Date(d); n.setDate(n.getDate() + 7); return n })} className="rounded-lg p-1.5 text-[var(--cp-ink-soft)] hover:bg-[var(--cp-bg)]"><ChevronRight className="h-4 w-4" /></button>
+          <div className="flex items-center gap-1.5">
+            <button aria-label="Previous week" onClick={() => setWeekAnchor((d) => { const n = new Date(d); n.setDate(n.getDate() - 7); return n })} className="inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg p-2 text-[var(--cp-ink-soft)] hover:bg-[var(--cp-bg)]"><ChevronLeft className="h-4 w-4" /></button>
+            <button onClick={() => setWeekAnchor(new Date())} className="inline-flex min-h-[36px] items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold text-[var(--cp-primary)] hover:bg-[var(--cp-primary-light)]">Today</button>
+            <button aria-label="Next week" onClick={() => setWeekAnchor((d) => { const n = new Date(d); n.setDate(n.getDate() + 7); return n })} className="inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg p-2 text-[var(--cp-ink-soft)] hover:bg-[var(--cp-bg)]"><ChevronRight className="h-4 w-4" /></button>
           </div>
         </div>
 
@@ -95,7 +95,7 @@ export default function OTDashboard() {
                           <button
                             key={s.id}
                             onClick={() => setSelectedSurgeryId(s.id)}
-                            aria-label={`${s.scheduledTime} ${s.patientName} — ${s.procedureName}`}
+                            aria-label={`${formatTime(s.scheduledTime)} ${s.patientName} — ${s.procedureName}`}
                             title={s.procedureName}
                             className={cn(
                               "rounded-md px-2 py-1 text-left text-[11px] font-medium leading-tight transition-transform hover:-translate-y-0.5",
@@ -104,7 +104,7 @@ export default function OTDashboard() {
                               s.status === "In Progress" && "animate-cp-glow-critical"
                             )}
                           >
-                            <span className="flex items-center gap-1"><span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />{s.scheduledTime}</span>
+                            <span className="flex items-center gap-1"><span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />{formatTime(s.scheduledTime)}</span>
                             <span className="block truncate">{s.patientName}</span>
                           </button>
                         )

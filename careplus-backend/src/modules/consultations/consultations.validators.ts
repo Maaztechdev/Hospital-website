@@ -43,7 +43,9 @@ const consultationFields = {
   findings: z.string().max(4000).optional(),
   clinicalNotes: z.string().max(4000).optional(),
   followUpDate: z.string().date().optional(),
+  followUpInstructions: z.string().max(4000).optional(),
   referral: z.string().max(500).optional(),
+  expectedUpdatedAt: z.string().optional(),
 };
 
 export const createConsultationSchema = z.object({

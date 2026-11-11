@@ -1,11 +1,12 @@
-import { Prisma, AppointmentStatus } from "@prisma/client";
+import { sseService } from "@modules/realtime/sse.service";
+import { Prisma, AppointmentStatus, Gender } from "@prisma/client";
 import { Request } from "express";
 import { randomUUID } from "crypto";
 import { prisma } from "@config/prisma";
-import { BadRequestError, ConflictError, NotFoundError } from "@common/errors/AppError";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "@common/errors/AppError";
 import { writeAuditLog } from "@common/utils/auditLog";
 import { notifyUser } from "@common/utils/notify";
-import { generateMrNumber, generateNextAppointmentToken } from "@common/utils/sequenceGenerators";
+import { generateMrNumber, generateNextAppointmentToken, generateDepartmentInvoiceNumber } from "@common/utils/sequenceGenerators";
 import { PageParams } from "@common/utils/pagination";
 import { AccessTokenPayload } from "@common/middleware/authenticate";
 import { assertDoctorOwns, getActorDoctorId, assertPatientAccess } from "@common/utils/recordAuthorization";
@@ -19,10 +20,10 @@ const HOSPITAL_TIMEZONE = "Asia/Karachi";
 
 const ALLOWED_TRANSITIONS: Record<AppointmentStatus, AppointmentStatus[]> = {
   PENDING_APPROVAL: ["CONFIRMED", "CANCELLED", "EXPIRED"],
-  CONFIRMED: ["WAITING", "CANCELLED", "NO_SHOW", "EXPIRED"],
-  WAITING: ["IN_CONSULTATION", "CANCELLED", "NO_SHOW", "EXPIRED"],
-  IN_CONSULTATION: ["DONE"],
-  DONE: [],
+  CONFIRMED: ["WAITING", "IN_CONSULTATION", "CANCELLED", "NO_SHOW", "EXPIRED"],
+  WAITING: ["IN_CONSULTATION", "CANCELLED", "NO_SHOW", "EXPIRED", "CONFIRMED"],
+  IN_CONSULTATION: ["COMPLETED"],
+  COMPLETED: [],
   CANCELLED: [],
   NO_SHOW: [],
   EXPIRED: [],
@@ -68,6 +69,11 @@ interface CreateAppointmentInput {
   source?: string;
   reason?: string;
   notes?: string;
+  generateInvoice?: boolean;
+  feePaid?: boolean;
+  paymentMethod?: string;
+  feeWaived?: boolean;
+  feeWaivedReason?: string;
 }
 
 interface PublicAppointmentInput {
@@ -75,6 +81,7 @@ interface PublicAppointmentInput {
   phone: string;
   email?: string;
   age: number;
+  gender: Gender;
   doctorId: string;
   departmentId?: string;
   appointmentDate: string;
@@ -135,7 +142,12 @@ async function getBookedSlots(tx: Prisma.TransactionClient | typeof prisma, doct
     FROM appointments
     WHERE doctor_id = ${doctorId}
       AND appointment_date = ${date}::date
-      AND status <> 'CANCELLED'::"AppointmentStatus"
+      AND status NOT IN (
+        'CANCELLED'::"AppointmentStatus",
+        'COMPLETED'::"AppointmentStatus",
+        'NO_SHOW'::"AppointmentStatus",
+        'EXPIRED'::"AppointmentStatus"
+      )
       ${excludeId ? Prisma.sql`AND id <> ${excludeId}` : Prisma.empty}
   `;
   return new Set(rows.map((row) => row.timeSlot));
@@ -185,29 +197,41 @@ export const appointmentsService = {
         const bookedSlots = await getBookedSlots(tx, input.doctorId, appointmentDate);
         assertSlotIsAvailable(doctor.scheduleJson, appointmentDate, input.timeSlot, bookedSlots);
 
-        const patient = await tx.patient.findFirst({ where: { phone: input.phone, deletedAt: null }, orderBy: { createdAt: "asc" } }) ?? await tx.patient.create({
+        // Find patient by phone AND matching name, or create new patient
+        const existingPatient = await tx.patient.findFirst({
+          where: {
+            phone: input.phone,
+            deletedAt: null,
+            firstName: { equals: firstName, mode: "insensitive" },
+            lastName: { equals: lastName, mode: "insensitive" },
+          },
+          orderBy: { createdAt: "asc" },
+        });
+
+        const patient = existingPatient ?? await tx.patient.create({
           data: {
             mrNumber: await generateMrNumber(tx),
             firstName,
             lastName,
             age: input.age,
-            gender: "OTHER",
+            gender: input.gender,
             phone: input.phone,
             email: input.email,
             createdBy: systemUser.id,
           },
         });
+
         const createdId = randomUUID();
         const nextToken = await generateNextAppointmentToken(tx, input.doctorId, appointmentDate);
         await tx.$executeRaw`
           INSERT INTO appointments (
             id, patient_id, doctor_id, department_id, appointment_date, time_slot, token_number,
-            appointment_type, status, source, reason, created_by, created_at, updated_at
+            appointment_type, status, source, reason, gender, created_by, created_at, updated_at
           ) VALUES (
             ${createdId}, ${patient.id}, ${input.doctorId}, ${input.departmentId ?? doctor.departmentId},
             ${appointmentDate}::date, ${input.timeSlot}::time, ${nextToken},
             'NEW_VISIT'::"AppointmentType", ${initialStatus}::"AppointmentStatus", 'WEBSITE'::"AppointmentSource",
-            ${input.reason ?? null}, ${systemUser.id}, NOW(), NOW()
+            ${input.reason ?? null}, ${patient.gender}::"Gender", ${systemUser.id}, NOW(), NOW()
           )
         `;
 
@@ -220,7 +244,23 @@ export const appointmentsService = {
       const [auditAppointment] = await serializeAppointmentDateFields([appointment]);
       await writeAuditLog({ userId: systemUser.id, action: "CREATE", module: "appointments", entityType: "Appointment", entityId: appointment.id, newValues: auditAppointment, req });
       const isConfirmed = appointment.status === "CONFIRMED";
-      await notifyUser({ userId: appointment.doctor.userId, notificationType: isConfirmed ? "APPOINTMENT_CONFIRMED" : "APPOINTMENT_PENDING", title: isConfirmed ? "Appointment confirmed" : "New website appointment", message: `Token #${appointment.tokenNumber} for ${input.appointmentDate} ${input.timeSlot}`, relatedEntityType: "Appointment", relatedEntityId: appointment.id });
+      await notifyUser({
+        userId: appointment.doctor.userId,
+        notificationType: isConfirmed ? "APPOINTMENT_CONFIRMED" : "APPOINTMENT_PENDING",
+        title: isConfirmed ? "Appointment confirmed" : "New website appointment",
+        message: `Token #${appointment.tokenNumber} for ${input.appointmentDate} ${input.timeSlot}`,
+        relatedEntityType: "Appointment",
+        relatedEntityId: appointment.id,
+        variables: {
+          tokenNumber: appointment.tokenNumber,
+          patientName: `${appointment.patient.firstName} ${appointment.patient.lastName}`.trim(),
+          doctorName: appointment.doctor.user?.name ?? appointment.doctor.specialization,
+          appointmentDate: input.appointmentDate,
+          timeSlot: input.timeSlot,
+          date: input.appointmentDate,
+          time: input.timeSlot,
+        },
+      });
       return appointment;
     } catch (err) {
       if (isAppointmentUniqueConflict(err)) {
@@ -230,7 +270,7 @@ export const appointmentsService = {
     }
   },
 
-  async list(actor: AccessTokenPayload, params: PageParams & { date?: string; doctorId?: string; departmentId?: string; status?: string; sort?: "date" | "recentlyCreated" }) {
+  async list(actor: AccessTokenPayload, params: PageParams & { date?: string; doctorId?: string; departmentId?: string; status?: string; sort?: "date" | "recentlyCreated"; cursorCreatedAt?: string; cursorId?: string }) {
     await applyStaleAppointmentStatuses();
 
     const actorDoctorId = await getActorDoctorId(actor);
@@ -313,14 +353,14 @@ export const appointmentsService = {
 
     const [patient, doctor] = await Promise.all([
       prisma.patient.findFirst({ where: { id: input.patientId, deletedAt: null } }),
-      prisma.doctor.findFirst({ where: { id: input.doctorId, isAvailable: true, department: { status: "ACTIVE" } } }),
+      prisma.doctor.findFirst({ where: { id: input.doctorId, isAvailable: true, department: { status: "ACTIVE" } }, include: { user: true } }),
     ]);
     if (!patient) throw new NotFoundError("Patient not found");
     if (!doctor) throw new NotFoundError("Doctor not found");
 
     try {
       const appointment = await prisma.$transaction(async (tx) => {
-        const doctor = await tx.doctor.findFirst({ where: { id: input.doctorId, isAvailable: true, department: { status: "ACTIVE" } } });
+        const doctor = await tx.doctor.findFirst({ where: { id: input.doctorId, isAvailable: true, department: { status: "ACTIVE" } }, include: { user: true } });
         if (!doctor) throw new NotFoundError("Doctor not found");
 
         const bookedSlots = await getBookedSlots(tx, input.doctorId, date);
@@ -331,15 +371,93 @@ export const appointmentsService = {
         await tx.$executeRaw`
           INSERT INTO appointments (
             id, patient_id, doctor_id, department_id, appointment_date, time_slot, token_number,
-            appointment_type, status, priority, source, reason, notes, created_by, approved_by, created_at, updated_at
+            appointment_type, status, priority, source, reason, notes, gender, created_by, approved_by, created_at, updated_at
           ) VALUES (
             ${appointmentId}, ${input.patientId}, ${input.doctorId}, ${input.departmentId ?? null},
             ${date}::date, ${input.timeSlot}::time, ${nextToken},
             ${input.appointmentType}::"AppointmentType", ${initialStatus}::"AppointmentStatus",
             ${(input.priority ?? "ROUTINE")}::"Priority", ${(input.source ?? "WALK_IN")}::"AppointmentSource",
-            ${input.reason ?? null}, ${input.notes ?? null}, ${actorId}, ${initialStatus === "CONFIRMED" ? actorId : null}, NOW(), NOW()
+            ${input.reason ?? null}, ${input.notes ?? null}, ${patient.gender}::"Gender", ${actorId}, ${initialStatus === "CONFIRMED" ? actorId : null}, NOW(), NOW()
           )
         `;
+
+        const shouldGenerateInvoice = input.generateInvoice !== false;
+        const fee = Number(doctor.consultationFee ?? 0);
+        if (shouldGenerateInvoice && fee > 0) {
+          const invoiceNumber = await generateDepartmentInvoiceNumber(tx, "RECEPTION", new Date(date));
+          const isWaived = Boolean(input.feeWaived);
+          const isPaid = Boolean(input.feePaid) || isWaived;
+
+          if (isWaived) {
+            if (!["ADMIN", "RECEPTIONIST", "BILLING_MANAGER"].includes(actor.role)) {
+              throw new ForbiddenError("Only an administrator, receptionist, or billing manager can waive consultation fees.");
+            }
+            if (!input.feeWaivedReason || input.feeWaivedReason.trim().length === 0) {
+              throw new BadRequestError("A valid reason is required to waive the OPD consultation fee.");
+            }
+          }
+
+          const inv = await tx.invoice.create({
+            data: {
+              invoiceNumber,
+              patientId: input.patientId,
+              appointmentId,
+              department: "RECEPTION",
+              status: isPaid ? "PAID" : "FINALIZED",
+              subtotal: fee,
+              discountAmount: isWaived ? fee : 0,
+              taxAmount: 0,
+              grandTotal: isWaived ? 0 : fee,
+              paidAmount: isWaived ? 0 : (isPaid ? fee : 0),
+              balanceAmount: isPaid ? 0 : fee,
+              createdBy: actorId,
+              items: {
+                create: {
+                  itemType: "CONSULTATION",
+                  description: `OPD Consultation - Dr. ${doctor.user?.name ?? doctor.specialization}${isWaived ? " (Fee Waived)" : ""}`,
+                  quantity: 1,
+                  unitPrice: fee,
+                  discount: isWaived ? fee : 0,
+                  subtotal: isWaived ? 0 : fee,
+                  sourceType: "APPOINTMENT",
+                  sourceId: appointmentId,
+                  sourceDepartment: "RECEPTION",
+                },
+              },
+            },
+          });
+
+          if (isPaid && !isWaived) {
+            await tx.payment.create({
+              data: {
+                invoiceId: inv.id,
+                amount: fee,
+                paymentMethod: (input.paymentMethod as never) ?? "CASH",
+                purpose: "PAYMENT",
+                notes: `OPD Consultation Fee collected at Reception for Token #${nextToken}`,
+                createdBy: actorId,
+              },
+            });
+          }
+
+          if (isWaived) {
+            await writeAuditLog({
+              userId: actorId,
+              action: "UPDATE",
+              module: "appointments",
+              entityType: "AppointmentFeeWaiver",
+              entityId: appointmentId,
+              reason: `FEE_WAIVED: ${input.feeWaivedReason!.trim()}`,
+              newValues: {
+                fee,
+                feeWaived: true,
+                feeWaivedReason: input.feeWaivedReason!.trim(),
+                invoiceId: inv.id,
+              },
+              req,
+            }, tx);
+          }
+        }
 
         return tx.appointment.findUniqueOrThrow({
           where: { id: appointmentId },
@@ -349,6 +467,7 @@ export const appointmentsService = {
 
       const [auditAppointment] = await serializeAppointmentDateFields([appointment]);
       await writeAuditLog({ userId: actorId, action: "CREATE", module: "appointments", entityType: "Appointment", entityId: appointment.id, newValues: auditAppointment, req });
+      sseService.broadcast({ type: "queue:updated", targetRoles: ["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"], targetDoctorId: doctor.id });
       await notifyUser({
         userId: doctor.userId,
         notificationType: appointment.status === "CONFIRMED" ? "APPOINTMENT_CONFIRMED" : "APPOINTMENT_PENDING",
@@ -356,6 +475,15 @@ export const appointmentsService = {
         message: `Token #${appointment.tokenNumber} for ${input.appointmentDate} ${input.timeSlot}`,
         relatedEntityType: "Appointment",
         relatedEntityId: appointment.id,
+        variables: {
+          tokenNumber: appointment.tokenNumber,
+          patientName: `${appointment.patient.firstName} ${appointment.patient.lastName}`.trim(),
+          doctorName: appointment.doctor.user?.name ?? doctor.specialization,
+          appointmentDate: input.appointmentDate,
+          timeSlot: input.timeSlot,
+          date: input.appointmentDate,
+          time: input.timeSlot,
+        },
       });
       return appointment;
     } catch (err) {
@@ -374,7 +502,10 @@ export const appointmentsService = {
     req?: Request,
     action?: AppointmentAction
   ) {
-    const appt = await prisma.appointment.findUnique({ where: { id }, include: { doctor: true } });
+    const appt = await prisma.appointment.findUnique({
+      where: { id },
+      include: { doctor: { include: { user: true } }, patient: true },
+    });
     if (!appt) throw new NotFoundError("Appointment not found");
     await assertDoctorOwns(actor, appt.doctorId);
     if (action) assertAppointmentActionAllowed(appt.status, action);
@@ -382,11 +513,47 @@ export const appointmentsService = {
 
     const actorId = actor.sub;
     const data: Prisma.AppointmentUpdateInput = { status: to, ...extra };
-    if (to === "WAITING") data.waitingSince = new Date();
+    if (to === "WAITING" || to === "IN_CONSULTATION") {
+      const unpaidInvoice = await prisma.invoice.findFirst({
+        where: { appointmentId: id, status: { not: "VOID" }, balanceAmount: { gt: 0 } },
+      });
+      if (unpaidInvoice && Number(unpaidInvoice.balanceAmount) > 0) {
+        if (extra?.feeWaived) {
+          if (!["ADMIN", "RECEPTIONIST", "BILLING_MANAGER"].includes(actor.role)) {
+            throw new ForbiddenError("Only an administrator, receptionist, or billing manager can waive consultation fees.");
+          }
+          const reason = typeof extra.feeWaivedReason === "string" ? extra.feeWaivedReason.trim() : "";
+          if (!reason) {
+            throw new BadRequestError("A valid reason is required to waive the consultation fee.");
+          }
+          await prisma.invoice.update({
+            where: { id: unpaidInvoice.id },
+            data: { status: "PAID", balanceAmount: 0, discountAmount: unpaidInvoice.grandTotal },
+          });
+          await writeAuditLog({
+            userId: actorId,
+            action: "UPDATE",
+            module: "appointments",
+            entityType: "AppointmentFeeWaiver",
+            entityId: id,
+            reason: `FEE_WAIVED: ${reason}`,
+            newValues: { invoiceId: unpaidInvoice.id, waivedAmount: unpaidInvoice.balanceAmount, reason },
+            req,
+          });
+        } else {
+          throw new BadRequestError(
+            `Consultation fee of PKR ${unpaidInvoice.balanceAmount} is unpaid. Payment must be collected or an authorized fee waiver reason provided before activating into queue.`
+          );
+        }
+      }
+      data.waitingSince = new Date();
+    }
     if (to === "CONFIRMED") data.approvedBy = actorId;
 
     const updated = await prisma.appointment.update({ where: { id }, data });
 
+    sseService.broadcast({ type: "appointment:updated", targetRoles: ["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"], targetDoctorId: appt.doctorId });
+    sseService.broadcast({ type: "queue:updated", targetRoles: ["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"], targetDoctorId: appt.doctorId });
     await writeAuditLog({
       userId: actorId,
       action: "STATUS_CHANGE",
@@ -407,6 +574,15 @@ export const appointmentsService = {
         message: `Token #${appt.tokenNumber} confirmed for ${dateFields.appointmentDate}`,
         relatedEntityType: "Appointment",
         relatedEntityId: id,
+        variables: {
+          tokenNumber: appt.tokenNumber,
+          patientName: `${appt.patient.firstName} ${appt.patient.lastName}`.trim(),
+          doctorName: appt.doctor.user?.name ?? appt.doctor.specialization,
+          appointmentDate: dateFields.appointmentDate,
+          timeSlot: appt.timeSlot,
+          date: dateFields.appointmentDate,
+          time: appt.timeSlot,
+        },
       });
     }
 
@@ -487,10 +663,18 @@ export const appointmentsService = {
   },
 
   async markDone(actor: AccessTokenPayload, id: string, req?: Request) {
-    return this.transitionStatus(actor, id, "DONE", {}, req, "COMPLETE");
+    return this.transitionStatus(actor, id, "COMPLETED", {}, req, "COMPLETE");
   },
 
   async markNoShow(actor: AccessTokenPayload, id: string, req?: Request) {
+    if (actor.role === "DOCTOR") {
+      const appt = await prisma.appointment.findUnique({ where: { id }, select: { status: true, doctorId: true } });
+      if (!appt) throw new NotFoundError("Appointment not found");
+      await assertDoctorOwns(actor, appt.doctorId);
+      if (appt.status !== "WAITING") {
+        throw new BadRequestError("Doctors can only mark no-show for appointments that are currently waiting");
+      }
+    }
     return this.transitionStatus(actor, id, "NO_SHOW", {}, req, "MARK_NO_SHOW");
   },
 
@@ -517,22 +701,129 @@ export const appointmentsService = {
 
   async callNext(actor: AccessTokenPayload, doctorId: string, req?: Request) {
     await assertDoctorOwns(actor, doctorId);
-    const next = await prisma.appointment.findFirst({
-      where: { doctorId, status: "CONFIRMED" },
-      orderBy: [{ priority: "desc" }, { tokenNumber: "asc" }],
+
+    const result = await prisma.$transaction(async (tx) => {
+      const lockedDoctor = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM doctors WHERE id = ${doctorId} FOR UPDATE
+      `;
+      if (lockedDoctor.length === 0) throw new NotFoundError("Doctor not found");
+
+      const current = await tx.appointment.findFirst({
+        where: {
+          doctorId,
+          status: { in: ["WAITING", "IN_CONSULTATION"] },
+        },
+        select: { id: true, tokenNumber: true, status: true },
+      });
+      if (current) {
+        throw new ConflictError(
+          `Doctor already has a patient called or in consultation (token #${current.tokenNumber}). Resume the current consultation before calling another patient.`
+        );
+      }
+
+      const next = await tx.appointment.findFirst({
+        where: {
+          doctorId,
+          status: "CONFIRMED",
+        },
+        orderBy: { tokenNumber: "asc" },
+      });
+      if (!next) return null;
+
+      assertAppointmentActionAllowed(next.status, "CALL_NEXT");
+      assertTransition(next.status, "WAITING");
+
+      const unpaidInvoice = await tx.invoice.findFirst({
+        where: { appointmentId: next.id, status: { not: "VOID" }, balanceAmount: { gt: 0 } },
+      });
+      if (unpaidInvoice && Number(unpaidInvoice.balanceAmount) > 0) {
+        throw new BadRequestError(
+          `Cannot call Token #${next.tokenNumber}: Consultation fee of PKR ${unpaidInvoice.balanceAmount} is unpaid. Payment must be collected or waived at reception before patient can be called.`
+        );
+      }
+
+      const updated = await tx.appointment.update({
+        where: { id: next.id },
+        data: { status: "WAITING", waitingSince: new Date() },
+      });
+      return { previous: next, appointment: updated };
     });
-    if (!next) throw new NotFoundError("No patients waiting in queue for this doctor");
-    return this.transitionStatus(actor, next.id, "WAITING", {}, req, "CALL_NEXT");
+
+    if (!result) return null;
+
+    await writeAuditLog({
+      userId: actor.sub,
+      action: "STATUS_CHANGE",
+      module: "appointments",
+      entityType: "Appointment",
+      entityId: result.appointment.id,
+      oldValues: { status: result.previous.status },
+      newValues: { status: "WAITING" },
+      req,
+    });
+
+    sseService.broadcast({ type: "queue:updated", targetRoles: ["ADMIN", "RECEPTIONIST", "DOCTOR", "NURSE"], targetDoctorId: doctorId });
+    return result.appointment;
+  },
+
+  async waiveFee(actor: AccessTokenPayload, id: string, reason: string, req?: Request) {
+    if (!["ADMIN", "RECEPTIONIST", "BILLING_MANAGER"].includes(actor.role)) {
+      throw new ForbiddenError("Only an administrator, receptionist, or billing manager can waive consultation fees.");
+    }
+    const appt = await prisma.appointment.findUnique({ where: { id } });
+    if (!appt) throw new NotFoundError("Appointment not found");
+
+    const unpaidInvoice = await prisma.invoice.findFirst({
+      where: { appointmentId: id, status: { not: "VOID" }, balanceAmount: { gt: 0 } },
+    });
+    if (!unpaidInvoice) {
+      throw new ConflictError("No unpaid consultation fee found for this appointment.");
+    }
+
+    const updated = await prisma.invoice.update({
+      where: { id: unpaidInvoice.id },
+      data: {
+        status: "PAID",
+        discountAmount: unpaidInvoice.grandTotal,
+        balanceAmount: 0,
+      },
+    });
+
+    await writeAuditLog({
+      userId: actor.sub,
+      action: "UPDATE",
+      module: "appointments",
+      entityType: "AppointmentFeeWaiver",
+      entityId: id,
+      reason: `FEE_WAIVED: ${reason.trim()}`,
+      oldValues: { balanceAmount: unpaidInvoice.balanceAmount },
+      newValues: { invoiceId: updated.id, waivedAmount: unpaidInvoice.balanceAmount, reason: reason.trim() },
+      req,
+    });
+
+    return { appointment: appt, invoice: updated };
   },
 
   async requeue(actor: AccessTokenPayload, id: string, req?: Request) {
     const appt = await prisma.appointment.findUnique({ where: { id } });
     if (!appt) throw new NotFoundError("Appointment not found");
     await assertDoctorOwns(actor, appt.doctorId);
+    if (actor.role === "DOCTOR" && appt.status !== "WAITING") {
+      throw new BadRequestError("Doctors can only requeue appointments that are currently waiting");
+    }
     assertAppointmentActionAllowed(appt.status, "REQUEUE");
     const actorId = actor.sub;
     const updated = await prisma.appointment.update({ where: { id }, data: { status: "CONFIRMED", waitingSince: null } });
-    await writeAuditLog({ userId: actorId, action: "STATUS_CHANGE", module: "opd-queue", entityType: "Appointment", entityId: id, newValues: { status: "CONFIRMED" }, req });
+    await writeAuditLog({
+      userId: actorId,
+      action: "STATUS_CHANGE",
+      module: "opd-queue",
+      entityType: "Appointment",
+      entityId: id,
+      oldValues: { status: appt.status },
+      newValues: { status: "CONFIRMED" },
+      req,
+    });
     return updated;
   },
 

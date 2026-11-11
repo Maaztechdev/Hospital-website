@@ -61,7 +61,7 @@ async function main() {
   assert(timeSlot, "doctor has no available appointment slot tomorrow")
   const appointment = await api<AnyRecord>("/appointments", token, {
     method: "POST",
-    body: JSON.stringify({ patientId: patient.id, doctorId: doctor.id, appointmentDate: tomorrowDate, timeSlot, appointmentType: "NEW_VISIT", source: "WALK_IN", reason: "Full lifecycle audit" }),
+    body: JSON.stringify({ patientId: patient.id, doctorId: doctor.id, appointmentDate: tomorrowDate, timeSlot, appointmentType: "NEW_VISIT", source: "WALK_IN", gender: patient.gender, reason: "Full lifecycle audit" }),
   })
   assert(appointment.patientId === patient.id, "appointment patient_id does not match patient")
   await expectAudit(token, appointment.id, "CREATE", "appointment")

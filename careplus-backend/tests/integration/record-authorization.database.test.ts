@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { createApp } from "../../src/app";
 import { prisma } from "@config/prisma";
 import { redis } from "@config/redis";
+import { generateLabOrderNumber } from "../../src/common/utils/sequenceGenerators";
 
 const app = createApp();
 const password = "IdorTest@12345";
@@ -62,11 +63,11 @@ describe("Database-backed record authorization", () => {
       await prisma.$executeRaw`
         INSERT INTO appointments (
           id, patient_id, doctor_id, department_id, appointment_date, time_slot, token_number,
-          appointment_type, status, priority, source, created_by, created_at, updated_at
+          appointment_type, status, priority, source, gender, created_by, created_at, updated_at
         ) VALUES (
           ${id}, ${patientId}, ${doctorId}, ${department.id}, ${appointmentDate}::date, ${timeSlot}::time, ${tokenNumber},
           'NEW_VISIT'::"AppointmentType", 'CONFIRMED'::"AppointmentStatus", 'ROUTINE'::"Priority", 'WALK_IN'::"AppointmentSource",
-          ${admin.id}, NOW(), NOW()
+          'OTHER'::"Gender", ${admin.id}, NOW(), NOW()
         )
       `;
       return prisma.appointment.findUniqueOrThrow({ where: { id } });
@@ -76,7 +77,7 @@ describe("Database-backed record authorization", () => {
     consultationB = await prisma.consultation.create({ data: { appointmentId: appointmentB.id, patientId: patientB.id, doctorId: profileB.id } });
     prescriptionB = await prisma.prescription.create({ data: { consultationId: consultationB.id, patientId: patientB.id, doctorId: profileB.id, items: { create: { medicineName: "Test", dosage: "1", route: "oral", frequency: "daily", durationDays: 1 } } } });
     test = await prisma.labTest.create({ data: { testName: `IDOR Test ${suffix}`, testCode: `IDOR${suffix}`, price: 1 } });
-    labOrderB = await prisma.labOrder.create({ data: { patientId: patientB.id, doctorId: profileB.id, testId: test.id, createdBy: admin.id } });
+    labOrderB = await prisma.labOrder.create({ data: { orderNumber: await generateLabOrderNumber(prisma), patientId: patientB.id, doctorId: profileB.id, testId: test.id, createdBy: admin.id } });
   });
 
   afterAll(async () => {
@@ -105,7 +106,7 @@ describe("Database-backed record authorization", () => {
     expect((await request(app).get(`/api/v1/appointments/${appointmentA.id}`).set("Authorization", `Bearer ${tokenA}`)).status).toBe(200);
     const consultationA = await prisma.consultation.create({ data: { appointmentId: appointmentA.id, patientId: patientA.id, doctorId: profileA.id } });
     const prescriptionA = await prisma.prescription.create({ data: { consultationId: consultationA.id, patientId: patientA.id, doctorId: profileA.id } });
-    const labOrderA = await prisma.labOrder.create({ data: { patientId: patientA.id, doctorId: profileA.id, testId: test.id, createdBy: admin.id } });
+    const labOrderA = await prisma.labOrder.create({ data: { orderNumber: await generateLabOrderNumber(prisma), patientId: patientA.id, doctorId: profileA.id, testId: test.id, createdBy: admin.id } });
     expect((await request(app).get(`/api/v1/consultations/${consultationA.id}`).set("Authorization", `Bearer ${tokenA}`)).status).toBe(200);
     expect((await request(app).get(`/api/v1/prescriptions/${prescriptionA.id}`).set("Authorization", `Bearer ${tokenA}`)).status).toBe(200);
     expect((await request(app).get(`/api/v1/lab/orders/${labOrderA.id}`).set("Authorization", `Bearer ${tokenA}`)).status).toBe(200);

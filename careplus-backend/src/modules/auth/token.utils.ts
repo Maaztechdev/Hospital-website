@@ -104,6 +104,11 @@ export async function createPasswordResetToken(userId: string): Promise<string> 
   return token;
 }
 
+export async function verifyPasswordResetToken(token: string): Promise<string | null> {
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  return redis.get(`${PASSWORD_RESET_PREFIX}${tokenHash}`);
+}
+
 export async function consumePasswordResetToken(token: string): Promise<string | null> {
   const tokenHash = createHash("sha256").update(token).digest("hex");
   return redis.getdel(`${PASSWORD_RESET_PREFIX}${tokenHash}`);

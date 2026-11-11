@@ -37,7 +37,12 @@ export default function ConsultationRecord() {
     }
   }, [consultationId])
 
-  React.useEffect(() => { void load() }, [load])
+  React.useEffect(() => {
+    void load()
+    const handleInvalidate = () => { void load() }
+    window.addEventListener("careplus:data-invalidated", handleInvalidate)
+    return () => window.removeEventListener("careplus:data-invalidated", handleInvalidate)
+  }, [load])
 
   async function saveAddendum() {
     const note = addendum.trim()
@@ -106,7 +111,13 @@ export default function ConsultationRecord() {
         <section><h3 className="font-semibold">Diagnosis</h3><p className="mt-1 whitespace-pre-wrap text-sm">{consultation.diagnosis || "Not recorded"}</p></section>
         <section><h3 className="font-semibold">Findings</h3><p className="mt-1 whitespace-pre-wrap text-sm">{consultation.findings || "Not recorded"}</p></section>
         <section><h3 className="font-semibold">Clinical notes</h3><p className="mt-1 whitespace-pre-wrap text-sm">{consultation.clinicalNotes || "Not recorded"}</p></section>
-        <section><h3 className="font-semibold">Follow-up</h3><p className="mt-1 text-sm">{consultation.followUpDate ? displayDate(consultation.followUpDate) : "Not recorded"}</p></section>
+        <section>
+          <h3 className="font-semibold">Follow-up</h3>
+          <p className="mt-1 text-sm">{consultation.followUpDate ? displayDate(consultation.followUpDate) : "Not recorded"}</p>
+          {consultation.followUpInstructions && (
+            <p className="mt-1 whitespace-pre-wrap text-sm text-[var(--cp-ink-soft)]"><strong>Instructions:</strong> {consultation.followUpInstructions}</p>
+          )}
+        </section>
         <section><h3 className="font-semibold">Referral</h3><p className="mt-1 whitespace-pre-wrap text-sm">{consultation.referral || "Not recorded"}</p></section>
       </CardContent></Card>
 

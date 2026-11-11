@@ -54,4 +54,10 @@ export const usersController = {
     const user = await usersService.deactivate(req.user.sub, req.params.id);
     sendSuccess(res, 200, { data: user, message: "User deactivated" });
   }),
+
+  unlock: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw new UnauthorizedError();
+    const result = await usersService.unlock(req.user.sub, req.params.id, req);
+    sendSuccess(res, 200, { data: result, message: result.message });
+  }),
 };

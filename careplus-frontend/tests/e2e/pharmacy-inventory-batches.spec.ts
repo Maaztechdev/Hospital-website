@@ -72,7 +72,7 @@ test("inventory shows batch details and records stock-in references per batch", 
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true, data: {} }) })
   })
 
-  await openDashboard(page, session, "/dashboard/pharmacy")
+  await openDashboard(page, session, "/dashboard/pharmacy?section=work-items")
   const medicineRow = page.getByRole("row").filter({ hasText: "Batch A Medicine" })
   await expect(medicineRow).toBeVisible()
   await expect(medicineRow.getByRole("cell", { name: "10", exact: true })).toBeVisible()

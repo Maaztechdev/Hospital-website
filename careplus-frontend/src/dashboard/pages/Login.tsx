@@ -1,6 +1,6 @@
 import * as React from "react"
-import { useLocation, useNavigate } from "react-router-dom"
-import { Cross, Mail, Lock, LogIn } from "lucide-react"
+import { Link, useLocation, useNavigate } from "react-router-dom"
+import { ArrowLeft, Cross, Mail, Lock, LogIn } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -20,6 +20,7 @@ const ROLE_MAP = {
   RADIOLOGIST: "radiologist",
   PHARMACIST: "pharmacist",
   NURSE: "nurse",
+  BILLING_MANAGER: "billing_manager",
 } as const
 
 export default function Login() {
@@ -61,6 +62,14 @@ export default function Login() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[var(--cp-bg)] px-4 py-10">
       <div className="w-full max-w-sm">
+        <Link
+          to="/"
+          className="mb-5 inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-[var(--cp-ink-soft)] transition-colors hover:bg-[var(--cp-surface)] hover:text-[var(--cp-primary)]"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to website
+        </Link>
+
         <div className="mb-6 flex flex-col items-center text-center">
           <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--cp-primary)] text-white">
             <Cross className="h-6 w-6" />
@@ -81,8 +90,16 @@ export default function Login() {
           </div>
 
           <div className="mb-5">
-            <Label htmlFor="password">Password</Label>
-            <div className="relative">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password">Password</Label>
+              <Link
+                to="/dashboard/forgot-password"
+                className="text-xs font-medium text-[var(--cp-primary)] hover:underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
+            <div className="relative mt-1">
               <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--cp-ink-faint)]" />
               <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} error={!!errors.password} className="pl-10" placeholder="••••••••" />
             </div>

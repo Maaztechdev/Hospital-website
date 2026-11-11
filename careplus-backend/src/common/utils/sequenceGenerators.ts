@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { InvoiceDepartment, Prisma } from "@prisma/client";
 import { env } from "@config/env";
 
 /**
@@ -9,14 +9,20 @@ import { env } from "@config/env";
 export async function generateMrNumber(tx: Prisma.TransactionClient): Promise<string> {
   const year = new Date().getFullYear();
 
-  const seq = await tx.mrNumberSequence.upsert({
-    where: { year },
-    create: { year, counter: 1 },
-    update: { counter: { increment: 1 } },
-  });
+  while (true) {
+    const seq = await tx.mrNumberSequence.upsert({
+      where: { year },
+      create: { year, counter: 1 },
+      update: { counter: { increment: 1 } },
+    });
 
-  const padded = String(seq.counter).padStart(6, "0");
-  return `${env.MR_NUMBER_PREFIX}-${year}-${padded}`;
+    const padded = String(seq.counter).padStart(6, "0");
+    const mrNumber = `${env.MR_NUMBER_PREFIX}-${year}-${padded}`;
+    const exists = await tx.patient.findUnique({ where: { mrNumber }, select: { id: true } });
+    if (!exists) {
+      return mrNumber;
+    }
+  }
 }
 
 /**
@@ -26,14 +32,47 @@ export async function generateMrNumber(tx: Prisma.TransactionClient): Promise<st
 export async function generateInvoiceNumber(tx: Prisma.TransactionClient): Promise<string> {
   const year = new Date().getFullYear();
 
-  const seq = await tx.invoiceNumberSequence.upsert({
-    where: { year },
-    create: { year, counter: 1 },
+  while (true) {
+    const seq = await tx.invoiceNumberSequence.upsert({
+      where: { year },
+      create: { year, counter: 1 },
+      update: { counter: { increment: 1 } },
+    });
+
+    const padded = String(seq.counter).padStart(6, "0");
+    const invoiceNumber = `${env.INVOICE_NUMBER_PREFIX}-${year}-${padded}`;
+    const exists = await tx.invoice.findUnique({ where: { invoiceNumber }, select: { id: true } });
+    if (!exists) {
+      return invoiceNumber;
+    }
+  }
+}
+
+const invoiceDepartmentPrefixes: Record<InvoiceDepartment, string> = {
+  RECEPTION: "OPD",
+  LAB: "LAB",
+  PHARMACY: "PHARM",
+  ULTRASOUND: "USG",
+  IPD: "IPD",
+};
+
+export async function generateDepartmentInvoiceNumber(
+  tx: Prisma.TransactionClient,
+  department: InvoiceDepartment,
+  date = new Date(),
+): Promise<string> {
+  const year = date.getFullYear();
+  const sequence = await tx.invoiceDepartmentSequence.upsert({
+    where: { department_year: { department, year } },
+    create: { department, year, counter: 1 },
     update: { counter: { increment: 1 } },
   });
-
-  const padded = String(seq.counter).padStart(6, "0");
-  return `${env.INVOICE_NUMBER_PREFIX}-${year}-${padded}`;
+  const number = `${invoiceDepartmentPrefixes[department]}-${year}-${String(sequence.counter).padStart(6, "0")}`;
+  const exists = await tx.invoice.findUnique({ where: { invoiceNumber: number }, select: { id: true } });
+  if (exists) {
+    return generateDepartmentInvoiceNumber(tx, department, date);
+  }
+  return number;
 }
 
 /**
@@ -42,12 +81,18 @@ export async function generateInvoiceNumber(tx: Prisma.TransactionClient): Promi
  */
 export async function generateLabOrderNumber(tx: Prisma.TransactionClient): Promise<string> {
   const year = new Date().getFullYear();
-  const seq = await tx.labOrderNumberSequence.upsert({
-    where: { year },
-    create: { year, counter: 1 },
-    update: { counter: { increment: 1 } },
-  });
-  return `LAB-${year}-${String(seq.counter).padStart(6, "0")}`;
+  while (true) {
+    const seq = await tx.labOrderNumberSequence.upsert({
+      where: { year },
+      create: { year, counter: 1 },
+      update: { counter: { increment: 1 } },
+    });
+    const orderNumber = `LAB-${year}-${String(seq.counter).padStart(6, "0")}`;
+    const exists = await tx.labOrder.findUnique({ where: { orderNumber }, select: { id: true } });
+    if (!exists) {
+      return orderNumber;
+    }
+  }
 }
 
 /**

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AppointmentType, AppointmentSource, Priority } from "@prisma/client";
+import { AppointmentType, AppointmentSource, Priority, Gender } from "@prisma/client";
 import { ageSchema } from "@modules/patients/patients.validators";
 
 export const createAppointmentSchema = z.object({
@@ -13,6 +13,11 @@ export const createAppointmentSchema = z.object({
   source: z.nativeEnum(AppointmentSource).optional(),
   reason: z.string().max(1000).optional(),
   notes: z.string().max(1000).optional(),
+  generateInvoice: z.boolean().optional(),
+  feePaid: z.boolean().optional(),
+  feeWaived: z.boolean().optional(),
+  feeWaivedReason: z.string().trim().max(500).optional(),
+  paymentMethod: z.enum(["CASH", "CARD", "BANK_TRANSFER", "MOBILE_WALLET", "ONLINE"]).optional(),
 });
 
 export const publicAppointmentSchema = z.object({
@@ -20,6 +25,7 @@ export const publicAppointmentSchema = z.object({
   phone: z.string().trim().regex(/^\+?[0-9][0-9\s-]{6,18}$/, "Enter a valid phone number"),
   email: z.string().email().optional(),
   age: ageSchema,
+  gender: z.nativeEnum(Gender),
   doctorId: z.string().uuid(),
   departmentId: z.string().uuid(),
   appointmentDate: z.string().date(),
@@ -48,8 +54,14 @@ export const listAppointmentsQuerySchema = z.object({
   departmentId: z.string().uuid().optional(),
   status: z.string().optional(),
   sort: z.enum(["date", "recentlyCreated"]).optional(),
+  cursorCreatedAt: z.string().optional(),
+  cursorId: z.string().uuid().optional(),
 });
 
 export const idParamSchema = z.object({
   id: z.string().uuid(),
+});
+
+export const waiveFeeSchema = z.object({
+  reason: z.string().trim().min(3, "A valid waiver reason is required"),
 });

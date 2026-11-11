@@ -11,6 +11,7 @@ import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { api, type ApiMedicine, type ApiMedicineBatch, type ApiPatient, type ApiPharmacySale, type ApiPharmacySettings } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { InvoicePrintDocument, type PrintLayout } from "./PharmacyPrintDocuments"
+import { printElement } from "@/lib/print"
 
 type CartLine = { medicine: ApiMedicine; quantity: number; unitPrice: number }
 type PaymentTab = "CASH" | "CARD" | "OTHER" | "CREDIT"
@@ -139,13 +140,9 @@ function BillingPage() {
 
   React.useEffect(() => {
     if (!printing) return
-    const handleAfterPrint = () => setPrinting(false)
-    window.addEventListener("afterprint", handleAfterPrint, { once: true })
-    const frame = window.requestAnimationFrame(() => window.print())
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.removeEventListener("afterprint", handleAfterPrint)
-    }
+    void printElement("pharmacy-print-root", {
+      afterPrint: () => setPrinting(false),
+    }).catch(() => setPrinting(false))
   }, [printing])
 
   const addToCart = (medicine: ApiMedicine, quantity: number) => {

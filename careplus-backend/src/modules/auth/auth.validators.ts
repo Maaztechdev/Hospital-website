@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { passwordPolicySchema } from "../../common/validators/passwordPolicy";
 
 export const loginSchema = z.object({
   email: z.string().email(),
@@ -6,7 +7,7 @@ export const loginSchema = z.object({
 });
 
 export const refreshSchema = z.object({
-  refreshToken: z.string().min(1),
+  refreshToken: z.string().min(1).optional(),
 });
 
 export const forgotPasswordSchema = z.object({
@@ -15,18 +16,14 @@ export const forgotPasswordSchema = z.object({
 
 export const resetPasswordSchema = z.object({
   token: z.string().min(1),
-  newPassword: z
-    .string()
-    .min(8, "Password must be at least 8 characters")
-    .regex(/[A-Z]/, "Password must contain an uppercase letter")
-    .regex(/[0-9]/, "Password must contain a number"),
+  newPassword: passwordPolicySchema,
+});
+
+export const verifyResetTokenSchema = z.object({
+  token: z.string().min(1, "Reset token is required"),
 });
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z
-    .string()
-    .min(8, "Password must be at least 8 characters")
-    .regex(/[A-Z]/, "Password must contain an uppercase letter")
-    .regex(/[0-9]/, "Password must contain a number"),
+  newPassword: passwordPolicySchema,
 });

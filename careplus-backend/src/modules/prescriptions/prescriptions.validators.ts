@@ -2,30 +2,36 @@ import { z } from "zod";
 import { DOSE_UNITS, DURATION_UNITS, FREQUENCY_CODES, ROUTE_OPTIONS, prescriptionItemsSchema } from "@common/validation/prescription";
 
 const prescriptionPadDataSchema = z.object({
-  visitNumber: z.string().trim().max(100).optional(),
-  visitDate: z.string().date().optional(),
-  visitTime: z.string().trim().max(30).optional(),
-  relationship: z.string().trim().max(20).optional(),
-  patientAddress: z.string().trim().max(500).optional(),
-  patientContact: z.string().trim().max(40).optional(),
-  patientAge: z.number().int().nonnegative().max(150).optional(),
-  patientGender: z.enum(["MALE", "FEMALE", "OTHER"]).optional(),
-  patientWeight: z.string().trim().max(40).optional(),
-  vitals: z.record(z.string(), z.unknown()).optional(),
-  allergies: z.string().max(2000).optional(),
-  presentingComplaints: z.string().max(4000).optional(),
-  history: z.string().max(4000).optional(),
-  findings: z.string().max(4000).optional(),
-  investigations: z.string().max(4000).optional(),
-  rxText: z.string().max(20000).optional(),
-  refillNumber: z.number().int().min(0).max(4).optional(),
+  visitNumber: z.string().trim().max(100).nullable().optional(),
+  visitDate: z.string().date().nullable().optional(),
+  visitTime: z.string().trim().max(30).nullable().optional(),
+  relationship: z.string().trim().max(20).nullable().optional(),
+  patientAddress: z.string().trim().max(500).nullable().optional(),
+  patientContact: z.string().trim().max(40).nullable().optional(),
+  patientAge: z.number().int().nonnegative().max(150).nullable().optional(),
+  patientGender: z.enum(["MALE", "FEMALE", "OTHER"]).nullable().optional(),
+  patientWeight: z.string().trim().max(40).nullable().optional(),
+  vitals: z.record(z.string(), z.unknown()).nullable().optional(),
+  allergies: z.string().max(2000).nullable().optional(),
+  presentingComplaints: z.string().max(4000).nullable().optional(),
+  history: z.string().max(4000).nullable().optional(),
+  findings: z.string().max(4000).nullable().optional(),
+  investigations: z.string().max(4000).nullable().optional(),
+  rxText: z.string().max(20000).nullable().optional(),
+  refillNumber: z.number().int().min(0).max(4).nullable().optional(),
 });
 
 export const createPrescriptionSchema = z.object({
-  consultationId: z.string().uuid(),
+  consultationId: z.string().uuid().optional(),
+  patientId: z.string().uuid().optional(),
+  doctorId: z.string().uuid().optional(),
+  status: z.enum(["DRAFT", "SIGNED"]).optional(),
   items: prescriptionItemsSchema,
   padData: prescriptionPadDataSchema.optional(),
   allergyOverrides: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+}).refine((data) => data.consultationId || (data.patientId && data.doctorId), {
+  message: "Either consultationId or both patientId and doctorId must be provided",
+  path: ["consultationId"],
 });
 
 export const voidPrescriptionSchema = z.object({
@@ -50,11 +56,22 @@ export const prescriptionTemplateSchema = z.object({
   items: z.array(templateItemSchema).min(1).max(100),
 });
 
+export const updatePrescriptionSchema = z.object({
+  expectedUpdatedAt: z.string().optional(),
+  items: prescriptionItemsSchema.optional(),
+  padData: prescriptionPadDataSchema.optional(),
+  allergyOverrides: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+});
+
+export const signPrescriptionSchema = z.object({
+  expectedUpdatedAt: z.string().optional(),
+});
+
 export const idParamSchema = z.object({ id: z.string().uuid() });
 
 export const listPrescriptionsQuerySchema = z.object({
   page: z.string().optional(),
   limit: z.string().optional(),
   patientId: z.string().uuid().optional(),
-  status: z.enum(["DRAFT", "SIGNED", "COMPLETED", "DISPENSED", "VOID"]).optional(),
+  status: z.enum(["DRAFT", "SIGNED", "COMPLETED", "DISPENSED", "PARTIALLY_DISPENSED", "VOID"]).optional(),
 });

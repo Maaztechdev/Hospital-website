@@ -26,7 +26,7 @@ export default function PatientList() {
 
   const filtered = React.useMemo(() => patients.filter((p) => {
     const q = search.trim().toLowerCase()
-    const matchesSearch = !q || p.name.toLowerCase().includes(q) || displayPakistaniPhone(p.phone).includes(q) || p.phone.includes(q) || p.mrNumber.toLowerCase().includes(q)
+    const matchesSearch = !q || p.name.toLowerCase().includes(q) || displayPakistaniPhone(p.phone).includes(q) || p.phone.includes(q) || p.mrNumber.toLowerCase().includes(q) || Boolean(p.cnic && p.cnic.includes(q))
     const matchesGender = gender === "all" || p.gender === gender
     const matchesBG = bloodGroup === "all" || p.bloodGroup === bloodGroup
     const matchesStatus = status === "all" || p.status === status
@@ -78,9 +78,9 @@ export default function PatientList() {
             key: "actions", header: "Actions", render: (p) => (
               <button
                 onClick={(e) => { e.stopPropagation(); navigate(`/dashboard/patients/${p.mrNumber}`) }}
-                className="inline-flex items-center gap-1 rounded-lg border border-[var(--cp-border)] px-2.5 py-1 text-xs font-semibold text-[var(--cp-primary)] hover:bg-[var(--cp-primary-light)]"
+                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-[var(--cp-border)] px-3 py-1.5 text-xs font-semibold text-[var(--cp-primary)] hover:bg-[var(--cp-primary-light)]"
               >
-                <Eye className="h-3.5 w-3.5" /> View
+                <Eye className="h-4 w-4" /> View
               </button>
             ),
           },

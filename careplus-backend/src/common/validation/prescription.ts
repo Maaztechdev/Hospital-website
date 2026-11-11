@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-export const DOSE_UNITS = ["tablet", "capsule", "ml", "mg", "drops", "puff", "unit"] as const
+export const DOSE_UNITS = ["tablet", "capsule", "ml", "mg", "drops", "puff", "unit", "tsp", "tbsp", "sachet", "injection", "patch"] as const
 export const ROUTE_OPTIONS = ["Oral", "IV", "IM", "Topical", "Inhaled", "Subcutaneous", "Rectal", "Ophthalmic", "Otic", "Nasal"] as const
 export const DURATION_UNITS = ["days", "weeks", "months"] as const
 export const FREQUENCY_CODES = ["OD", "BD", "TDS", "QID", "HS", "SOS", "Q6H", "Q8H", "Q12H", "STAT"] as const

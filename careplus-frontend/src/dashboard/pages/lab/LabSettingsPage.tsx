@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { DashboardPageHeader } from "@/dashboard/components/Layout"
 import { formatDateTime } from "@/dashboard/lib/format"
 import { useToast } from "@/hooks/use-toast"
-import { api, apiAssetUrl, getAccessToken, type ApiLabSettings, type ApiLabSettingsAssetType, type ApiLabTest } from "@/lib/api"
+import { api, apiAssetUrl, API_BASE_URL, getAccessToken, type ApiLabSettings, type ApiLabSettingsAssetType, type ApiLabTest } from "@/lib/api"
 
 const EMPTY_SETTINGS: ApiLabSettings = {
   labName: "",
@@ -69,7 +69,7 @@ export default function LabSettingsPage() {
     const loadPreview = async (path?: string) => {
       if (!path) return null
       const target = new URL(apiAssetUrl(path), window.location.origin)
-      const apiOrigin = new URL(import.meta.env.VITE_API_URL ?? "http://localhost:4000/api/v1", window.location.origin).origin
+      const apiOrigin = new URL(API_BASE_URL, window.location.origin).origin
       const token = getAccessToken()
       const response = await fetch(target, {
         headers: token && target.origin === apiOrigin ? { Authorization: `Bearer ${token}` } : undefined,

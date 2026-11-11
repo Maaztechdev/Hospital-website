@@ -1,6 +1,7 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
-import { Routes, Route, useLocation, useNavigate } from "react-router-dom"
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react"
+import { Navigate, Routes, Route, useLocation, useNavigate } from "react-router-dom"
 import { DashboardProvider } from "@/dashboard/store/DashboardContext"
+import { useDashboard } from "@/dashboard/store/DashboardContext"
 import { DashboardShell, RoleGuard } from "@/dashboard/components/Layout"
 import { getAccessToken, getAccessTokenExpiration, keepSessionSignedIn } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -28,7 +29,12 @@ const LabSettingsPage = lazy(() => import("@/dashboard/pages/lab/LabSettingsPage
 const LabInventoryPage = lazy(() => import("@/dashboard/pages/lab/LabInventoryPage"))
 const LabOrderDetail = lazy(() => import("@/dashboard/pages/lab/LabOrderDetail"))
 const UltrasoundDashboard = lazy(() => import("@/dashboard/pages/ultrasound/UltrasoundDashboard"))
+const UltrasoundOverviewPage = lazy(() => import("@/dashboard/pages/ultrasound/UltrasoundOverviewPage"))
+const UltrasoundReportsPage = lazy(() => import("@/dashboard/pages/ultrasound/UltrasoundReportsPage"))
+const UltrasoundAuditTrailPage = lazy(() => import("@/dashboard/pages/ultrasound/UltrasoundAuditTrailPage"))
 const InvoiceDetail = lazy(() => import("@/dashboard/pages/billing/InvoiceDetail"))
+const DepartmentBillingPanel = lazy(() => import("@/dashboard/pages/billing/DepartmentBillingPanel"))
+const DepartmentWorkspace = lazy(() => import("@/dashboard/pages/billing/DepartmentWorkspace"))
 const NursePanel = lazy(() => import("@/dashboard/pages/nurse/NursePanel"))
 const OTDashboard = lazy(() => import("@/dashboard/pages/ot/OTDashboard"))
 const WardRoundPage = lazy(() => import("@/dashboard/pages/ward/WardRoundPage"))
@@ -44,7 +50,43 @@ const PharmacyReportsPage = lazy(() => import("@/dashboard/pages/pharmacy/Pharma
 const PharmacyKhataPage = lazy(() => import("@/dashboard/pages/pharmacy/PharmacyKhataPage"))
 const UsersPage = lazy(() => import("@/dashboard/pages/admin/UsersPage"))
 const BackupPage = lazy(() => import("@/dashboard/pages/admin/BackupPage"))
+const ForgotPassword = lazy(() => import("@/dashboard/pages/ForgotPassword"))
+const ResetPassword = lazy(() => import("@/dashboard/pages/ResetPassword"))
 const DashboardNotFound = lazy(() => import("@/dashboard/pages/DashboardNotFound"))
+
+type WorkspaceDepartment = "LAB" | "PHARMACY" | "ULTRASOUND"
+
+function DepartmentRoot({ department, fallback }: { department: WorkspaceDepartment; fallback: ReactNode }) {
+  const { currentUser } = useDashboard()
+  if (currentUser?.role === "admin" || currentUser?.role === "billing_manager") {
+    return <DepartmentWorkspace department={department} />
+  }
+  return <>{fallback}</>
+}
+
+function DepartmentRouteRedirect({
+  department,
+  section,
+  manage,
+  fallback,
+}: {
+  department: WorkspaceDepartment
+  section: "overview" | "work-items" | "billing" | "history" | "manage"
+  manage?: string
+  fallback: ReactNode
+}) {
+  const { currentUser } = useDashboard()
+  const location = useLocation()
+  if (currentUser?.role !== "admin" && currentUser?.role !== "billing_manager") return <>{fallback}</>
+  const destinationSection = currentUser.role === "billing_manager"
+    ? section === "billing" ? "billing" : "history"
+    : section
+  const query = new URLSearchParams(location.search)
+  query.set("section", destinationSection)
+  if (currentUser.role === "admin" && manage) query.set("manage", manage)
+  else query.delete("manage")
+  return <Navigate to={`/dashboard/${department.toLowerCase()}?${query.toString()}`} replace />
+}
 
 const DEFAULT_WARNING_LEAD_MS = 2 * 60_000
 const DEFAULT_INACTIVITY_TIMEOUT_MS = 13 * 60_000
@@ -206,11 +248,11 @@ export default function DashboardApp() {
 
         <Route
           path="patients"
-          element={<DashboardShell><RoleGuard allow={["admin", "receptionist", "doctor", "lab_technician", "pharmacist", "nurse", "ultrasound_tech", "ultrasound_technician", "radiologist"]}><PatientList /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "receptionist", "doctor", "lab_technician", "pharmacist", "nurse", "ultrasound_tech", "ultrasound_technician", "radiologist"]}><PatientList /></RoleGuard></DashboardShell>}
         />
         <Route
           path="patients/:mrNumber"
-          element={<DashboardShell><RoleGuard allow={["admin", "receptionist", "doctor", "lab_technician", "pharmacist", "nurse", "ultrasound_tech", "ultrasound_technician", "radiologist"]}><PatientProfile /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "receptionist", "doctor", "lab_technician", "pharmacist", "nurse", "ultrasound_tech", "ultrasound_technician", "radiologist"]}><PatientProfile /></RoleGuard></DashboardShell>}
         />
 
         <Route
@@ -237,35 +279,39 @@ export default function DashboardApp() {
 
         <Route
           path="lab"
-          element={<DashboardShell><RoleGuard allow={["admin", "doctor", "receptionist", "lab_technician", "pathologist", "nurse"]}><LabDashboard /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "doctor", "receptionist", "lab_technician", "pathologist", "nurse"]}><DepartmentRoot department="LAB" fallback={<LabDashboard />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="lab/orders"
-          element={<DashboardShell><RoleGuard allow={["admin", "doctor", "receptionist", "lab_technician", "pathologist", "nurse"]}><LabOrdersPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "doctor", "receptionist", "lab_technician", "pathologist", "nurse"]}><DepartmentRouteRedirect department="LAB" section="work-items" fallback={<LabOrdersPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="lab/reports"
-          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "lab_technician", "pathologist"]}><LabReportsPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "lab_technician", "pathologist"]}><DepartmentRouteRedirect department="LAB" section="manage" manage="reports" fallback={<LabReportsPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="lab/ledger"
-          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager"]}><LabLedgerPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager"]}><DepartmentRouteRedirect department="LAB" section="manage" manage="ledger" fallback={<LabLedgerPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="lab/catalog"
-          element={<DashboardShell><RoleGuard allow={["admin", "lab_technician"]}><LabCatalogPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "lab_technician"]}><DepartmentRouteRedirect department="LAB" section="manage" manage="catalog" fallback={<LabCatalogPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="lab/settings"
-          element={<DashboardShell><RoleGuard allow={["admin"]}><LabSettingsPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin"]}><DepartmentRouteRedirect department="LAB" section="manage" manage="settings" fallback={<LabSettingsPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="lab/inventory"
-          element={<DashboardShell><RoleGuard allow={["admin", "lab_technician"]}><LabInventoryPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "lab_technician"]}><DepartmentRouteRedirect department="LAB" section="manage" manage="inventory" fallback={<LabInventoryPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="lab/invoices"
-          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "receptionist"]}><LabInvoicesPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "receptionist", "lab_technician"]}><DepartmentRouteRedirect department="LAB" section="history" fallback={<LabInvoicesPage />} /></RoleGuard></DashboardShell>}
+        />
+        <Route
+          path="lab/billing"
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "lab_technician"]}><DepartmentRouteRedirect department="LAB" section="billing" fallback={<DepartmentBillingPanel department="LAB" title="Lab Billing" />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="lab/:orderId"
@@ -273,38 +319,58 @@ export default function DashboardApp() {
         />
 
         <Route
+          path="ultrasound/overview"
+          element={<DashboardShell><RoleGuard allow={["admin", "doctor", "receptionist", "ultrasound_tech", "ultrasound_technician", "radiologist"]}><DepartmentRouteRedirect department="ULTRASOUND" section="overview" fallback={<UltrasoundOverviewPage />} /></RoleGuard></DashboardShell>}
+        />
+        <Route
+          path="ultrasound/reports"
+          element={<DashboardShell><RoleGuard allow={["admin", "doctor", "receptionist", "ultrasound_tech", "ultrasound_technician", "radiologist"]}><DepartmentRouteRedirect department="ULTRASOUND" section="manage" manage="reports" fallback={<UltrasoundReportsPage />} /></RoleGuard></DashboardShell>}
+        />
+        <Route
+          path="ultrasound/audit-trail"
+          element={<DashboardShell><RoleGuard allow={["admin"]}><DepartmentRouteRedirect department="ULTRASOUND" section="manage" manage="audit-trail" fallback={<UltrasoundAuditTrailPage />} /></RoleGuard></DashboardShell>}
+        />
+        <Route
+          path="ultrasound/billing"
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "ultrasound_tech", "ultrasound_technician"]}><DepartmentRouteRedirect department="ULTRASOUND" section="billing" fallback={<DepartmentBillingPanel department="ULTRASOUND" title="Ultrasound Billing" />} /></RoleGuard></DashboardShell>}
+        />
+        <Route
           path="ultrasound"
-          element={<DashboardShell><RoleGuard allow={["admin", "doctor", "receptionist", "lab_technician", "ultrasound_tech", "ultrasound_technician", "radiologist", "nurse"]}><UltrasoundDashboard /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "doctor", "receptionist", "lab_technician", "ultrasound_tech", "ultrasound_technician", "radiologist", "nurse"]}><DepartmentRoot department="ULTRASOUND" fallback={<UltrasoundDashboard />} /></RoleGuard></DashboardShell>}
         />
 
         <Route
           path="pharmacy/billing"
-          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><PharmacyBillingPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><DepartmentRouteRedirect department="PHARMACY" section="manage" manage="pos-billing" fallback={<PharmacyBillingPage />} /></RoleGuard></DashboardShell>}
+        />
+        <Route
+          path="pharmacy/invoice-history"
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "pharmacist"]}><DepartmentRouteRedirect department="PHARMACY" section="history" fallback={<DepartmentBillingPanel department="PHARMACY" title="Pharmacy Billing History" />} /></RoleGuard></DashboardShell>}
         />
 
         <Route
           path="pharmacy/discount-audit"
-          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><PharmacyDiscountAuditPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><DepartmentRouteRedirect department="PHARMACY" section="manage" manage="discount-audit" fallback={<PharmacyDiscountAuditPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="pharmacy/invoices"
-          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><PharmacyInvoicesPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><DepartmentRouteRedirect department="PHARMACY" section="manage" manage="invoices" fallback={<PharmacyInvoicesPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="pharmacy/settings"
-          element={<DashboardShell><RoleGuard allow={["admin"]}><PharmacySettingsPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin"]}><DepartmentRouteRedirect department="PHARMACY" section="manage" manage="settings" fallback={<PharmacySettingsPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="pharmacy/reports"
-          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><PharmacyReportsPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><DepartmentRouteRedirect department="PHARMACY" section="manage" manage="reports" fallback={<PharmacyReportsPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="pharmacy/khata"
-          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><PharmacyKhataPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><DepartmentRouteRedirect department="PHARMACY" section="manage" manage="khata" fallback={<PharmacyKhataPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="pharmacy/sale-adjustments"
-          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><PharmacySaleAdjustmentsPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><DepartmentRouteRedirect department="PHARMACY" section="manage" manage="sale-adjustments" fallback={<PharmacySaleAdjustmentsPage />} /></RoleGuard></DashboardShell>}
         />
         <Route
           path="pharmacy/invoices/:invoiceId"
@@ -313,21 +379,25 @@ export default function DashboardApp() {
 
         <Route
           path="pharmacy/legacy-sale"
-          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><PharmacyDashboard initialSaleOpen /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "pharmacist"]}><DepartmentRouteRedirect department="PHARMACY" section="work-items" fallback={<PharmacyDashboard initialSaleOpen />} /></RoleGuard></DashboardShell>}
         />
 
         <Route
           path="pharmacy"
-          element={<DashboardShell><RoleGuard allow={["admin", "doctor", "pharmacist"]}><PharmacyDashboard /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "doctor", "pharmacist"]}><DepartmentRoot department="PHARMACY" fallback={<PharmacyDashboard />} /></RoleGuard></DashboardShell>}
         />
 
         <Route
+          path="billing/collect"
+          element={<DashboardShell><RoleGuard allow={["receptionist"]}><DepartmentBillingPanel departments={["LAB", "PHARMACY", "ULTRASOUND"]} title="Collect Department Payments" collectOnly /></RoleGuard></DashboardShell>}
+        />
+        <Route
           path="billing"
-          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "receptionist"]}><BillingDashboard /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard module="billing" action="view" allow={["admin", "billing_manager", "receptionist"]}><BillingDashboard /></RoleGuard></DashboardShell>}
         />
         <Route
           path="billing/:invoiceId"
-          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "receptionist"]}><InvoiceDetail /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard allow={["admin", "billing_manager", "receptionist", "lab_technician", "pharmacist", "ultrasound_tech", "ultrasound_technician"]}><InvoiceDetail /></RoleGuard></DashboardShell>}
         />
 
         <Route
@@ -337,7 +407,7 @@ export default function DashboardApp() {
 
         <Route
           path="ward"
-          element={<DashboardShell><RoleGuard allow={["admin", "receptionist", "doctor", "nurse"]}><WardDashboard /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard module="ward" action="view" allow={["admin", "receptionist", "doctor", "nurse"]}><WardDashboard /></RoleGuard></DashboardShell>}
         />
         <Route
           path="ward/round/:admissionId"
@@ -355,7 +425,7 @@ export default function DashboardApp() {
 
         <Route
           path="reports"
-          element={<DashboardShell><RoleGuard allow={["admin"]}><ReportsPage /></RoleGuard></DashboardShell>}
+          element={<DashboardShell><RoleGuard module="reports" action="view" allow={["admin"]}><ReportsPage /></RoleGuard></DashboardShell>}
         />
 
         <Route
@@ -376,7 +446,10 @@ export default function DashboardApp() {
           element={<DashboardShell><RoleGuard allow={["admin"]}><BackupPage /></RoleGuard></DashboardShell>}
         />
 
+        <Route path="forgot-password" element={<ForgotPassword />} />
+        <Route path="reset-password" element={<ResetPassword />} />
         <Route index element={<Login />} />
+        <Route path="login" element={<Login />} />
         <Route path="*" element={<DashboardShell><DashboardNotFound /></DashboardShell>} />
         </Routes>
       </Suspense>

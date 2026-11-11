@@ -1,16 +1,8 @@
-import { test, expect, type APIRequestContext } from "@playwright/test"
-
-const apiBase = process.env.PLAYWRIGHT_API_URL ?? "http://127.0.0.1:4000/api/v1"
-const admin = { email: "admin@careplus.local", password: "Admin@12345" }
-
-async function apiLogin(request: APIRequestContext) {
-  const response = await request.post(`${apiBase}/auth/login`, { data: admin })
-  expect(response.ok()).toBeTruthy()
-  return (await response.json()).data as { accessToken: string; refreshToken: string }
-}
+import { test, expect } from "@playwright/test"
+import { apiBase, login } from "./test-helpers"
 
 test("dashboard hydrates real pharmacy state after reload", async ({ page, request }) => {
-  const session = await apiLogin(request)
+  const session = await login(request)
   const headers = { Authorization: `Bearer ${session.accessToken}` }
   const suffix = Date.now().toString()
   const medicineName = `Dashboard Hydration ${suffix}`
@@ -48,8 +40,8 @@ test("dashboard hydrates real pharmacy state after reload", async ({ page, reque
   const lowStockCard = page.getByText("Low Stock Medicines", { exact: true }).locator("xpath=../..")
   await expect(lowStockCard).toContainText(/[1-9][0-9]*/)
 
-  await page.goto("/dashboard/pharmacy")
-  await expect(page.getByRole("heading", { name: "Pharmacy" })).toBeVisible()
+  await page.goto("/dashboard/pharmacy?section=work-items")
+  await expect(page.getByRole("heading", { name: "Pharmacy" }).first()).toBeVisible()
   await page.getByPlaceholder("Search medicine or generic name…").fill(medicineName)
   await expect(page.getByRole("table").getByText(medicineName, { exact: true })).toBeVisible()
   await page.reload()

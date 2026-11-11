@@ -3,5 +3,10 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.test.example
 coverage/
 *.log
+jest-results.json
+prisma/backups/
+scratch/
+direct_audit*

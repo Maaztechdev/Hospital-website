@@ -1,3 +1,4 @@
+import { sseService } from "@modules/realtime/sse.service";
 import { Prisma } from "@prisma/client";
 import { Request } from "express";
 import jwt from "jsonwebtoken";
@@ -12,7 +13,7 @@ import { writeAuditLog } from "@common/utils/auditLog";
 import { notifyRoles } from "@common/utils/notify";
 import { AccessTokenPayload } from "@common/middleware/authenticate";
 import { PageParams } from "@common/utils/pagination";
-import { generateInvoiceNumber } from "@common/utils/sequenceGenerators";
+import { generateDepartmentInvoiceNumber } from "@common/utils/sequenceGenerators";
 import { isAccessTokenBlacklisted } from "@modules/auth/token.utils";
 
 const NEAR_EXPIRY_DAYS = 60;
@@ -92,7 +93,7 @@ async function appendPharmacyLedgerEntry(
   });
 }
 
-async function deductStockFefo(
+export async function deductStockFefo(
   tx: Prisma.TransactionClient,
   medicineId: string,
   quantity: number,
@@ -291,9 +292,21 @@ export const pharmacyService = {
 
   async uploadPharmacyLogo(actor: AccessTokenPayload, file: Express.Multer.File | undefined, req?: Request) {
     if (!file) throw new BadRequestError("A logo image is required.");
-    const extensions: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg" };
+    const extensions: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp" };
     if (file.size > 2 * 1024 * 1024 || !extensions[file.mimetype]) {
-      throw new BadRequestError("Pharmacy logo must be a PNG, JPEG, or SVG file no larger than 2 MB.");
+      throw new BadRequestError("Pharmacy logo must be a PNG, JPEG, or WebP file no larger than 2 MB. SVG is disallowed for security.");
+    }
+    // Verify magic bytes
+    let validSignature = false;
+    if (file.mimetype === "image/jpeg" && file.buffer.length >= 3 && file.buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) {
+      validSignature = true;
+    } else if (file.mimetype === "image/png" && file.buffer.length >= 8 && file.buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+      validSignature = true;
+    } else if (file.mimetype === "image/webp" && file.buffer.length >= 12 && file.buffer.subarray(0, 4).toString() === "RIFF" && file.buffer.subarray(8, 12).toString() === "WEBP") {
+      validSignature = true;
+    }
+    if (!validSignature) {
+      throw new BadRequestError("Corrupted or invalid image file signature.");
     }
     const relativePath = path.join("pharmacy-profile", `${randomUUID()}${extensions[file.mimetype]}`);
     const absolutePath = path.join(path.resolve(env.UPLOAD_DIR), relativePath);
@@ -915,25 +928,32 @@ export const pharmacyService = {
           },
         });
         if (!prescription) throw new NotFoundError("Prescription not found");
-        if (prescription.status !== "SIGNED") throw new ConflictError("Only a SIGNED prescription can be dispensed.");
-        if (prescription.items.some((item) => item.quantityDispensed > 0)) {
-          throw new ConflictError("This prescription has already had items dispensed and cannot be dispensed again.");
+        if (prescription.status !== "SIGNED" && prescription.status !== "PARTIALLY_DISPENSED") {
+          throw new ConflictError("Only a SIGNED or PARTIALLY_DISPENSED prescription can be dispensed.");
         }
 
         const catalogItems = prescription.items.filter((item) => item.isCatalogItem && item.medicineId);
         if (catalogItems.length === 0) {
           throw new BadRequestError("This prescription has no catalog medicines available for automatic dispensing.");
         }
-        const requested = new Map(input.items.map((item) => [item.prescriptionItemId, item.quantity]));
-        if (requested.size !== catalogItems.length || catalogItems.some((item) => !requested.has(item.id))) {
-          throw new BadRequestError("Specify a quantity for every catalog medicine on this prescription.");
+        for (const reqItem of input.items) {
+          if (reqItem.quantity < 0) {
+            throw new BadRequestError("Dispense quantity cannot be negative.");
+          }
         }
-
-        const statusChanged = await tx.prescription.updateMany({
-          where: { id: prescription.id, status: "SIGNED", deletedAt: null },
-          data: { status: "DISPENSED" },
-        });
-        if (statusChanged.count !== 1) throw new ConflictError("This prescription has already been dispensed.");
+        const requested = new Map(input.items.map((item) => [item.prescriptionItemId, item.quantity]));
+        for (const item of catalogItems) {
+          const totalPrescribed = (item as any).quantity ?? item.durationDays ?? item.durationValue ?? 1;
+          const remaining = Math.max(0, totalPrescribed - item.quantityDispensed);
+          const reqQty = requested.get(item.id) ?? 0;
+          if (reqQty > remaining) {
+            throw new ConflictError(`Requested quantity ${reqQty} for ${item.medicineName} exceeds remaining un-dispensed quantity of ${remaining}.`);
+          }
+        }
+        const itemsToDispense = catalogItems.filter((item) => (requested.get(item.id) ?? 0) > 0);
+        if (itemsToDispense.length === 0) {
+          throw new BadRequestError("At least one medicine must have a quantity greater than zero to dispense.");
+        }
 
         const saleId = randomUUID();
         const allocated: Array<{
@@ -945,7 +965,7 @@ export const pharmacyService = {
           subtotal: number;
           description: string;
         }> = [];
-        for (const item of catalogItems) {
+        for (const item of itemsToDispense) {
           const quantity = requested.get(item.id)!;
           const movements = await deductStockFefo(tx, item.medicineId!, quantity, "pharmacy_sale", saleId, actor.sub);
           const updatedItem = await tx.prescriptionItem.update({ where: { id: item.id }, data: { quantityDispensed: { increment: quantity } } });
@@ -972,12 +992,13 @@ export const pharmacyService = {
         }
 
         const subtotal = roundPkr(allocated.reduce((sum, item) => sum + item.subtotal, 0));
-        const invoiceNumber = await generateInvoiceNumber(tx);
+        const invoiceNumber = await generateDepartmentInvoiceNumber(tx, "PHARMACY");
         const invoice = await tx.invoice.create({
           data: {
             invoiceNumber,
             patientId: prescription.patientId,
             createdBy: actor.sub,
+            department: "PHARMACY",
             status: "PAID",
             subtotal,
             grandTotal: subtotal,
@@ -991,6 +1012,9 @@ export const pharmacyService = {
                 unitPrice: item.unitPrice,
                 discount: 0,
                 subtotal: item.subtotal,
+                sourceType: "MEDICINE_BATCH",
+                sourceId: item.batchId,
+                sourceDepartment: "PHARMACY",
               })),
             },
           },
@@ -1030,14 +1054,28 @@ export const pharmacyService = {
             },
           });
         }
+        const refreshedItems = await tx.prescriptionItem.findMany({ where: { prescriptionId: prescription.id } });
+        const allFullyDispensed = refreshedItems
+          .filter((item) => item.isCatalogItem && item.medicineId)
+          .every((item) => {
+            const totalPrescribed = (item as any).quantity ?? item.durationDays ?? item.durationValue ?? 1;
+            return item.quantityDispensed >= totalPrescribed;
+          });
+        const nextStatus = allFullyDispensed ? ("DISPENSED" as const) : ("PARTIALLY_DISPENSED" as const);
+
+        await tx.prescription.update({
+          where: { id: prescription.id },
+          data: { status: nextStatus },
+        });
+
         await writeAuditLog({
           userId: actor.sub,
           action: "DISPENSE",
           module: "pharmacy",
           entityType: "Prescription",
           entityId: prescription.id,
-          oldValues: { status: "SIGNED" },
-          newValues: { status: "DISPENSED", invoiceId: invoice.id, invoiceNumber },
+          oldValues: { status: prescription.status },
+          newValues: { status: nextStatus, invoiceId: invoice.id, invoiceNumber },
           req,
         }, tx);
         await writeAuditLog({
@@ -1049,8 +1087,9 @@ export const pharmacyService = {
           newValues: sale,
           req,
         }, tx);
+        sseService.broadcast({ type: "prescription:dispensed", targetRoles: ["ADMIN", "PHARMACIST", "DOCTOR"], payload: { prescriptionId: prescription.id, status: nextStatus } });
         return {
-          prescription: { id: prescription.id, status: "DISPENSED" as const },
+          prescription: { id: prescription.id, status: nextStatus },
           sale,
         };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -1131,6 +1170,11 @@ export const pharmacyService = {
           message: `Sale loss of PKR ${saleLoss.toFixed(2)} reached the configured alert threshold.`,
           relatedEntityType: "PharmacySale",
           relatedEntityId: saleId,
+          variables: {
+            saleLoss: saleLoss.toFixed(2),
+            threshold: lossAlertThreshold,
+            saleId,
+          },
         }, tx);
       }
       const totalAmount = Math.round((subtotal - discountAmount + input.tax) * 100) / 100;
@@ -1144,13 +1188,24 @@ export const pharmacyService = {
         throw new BadRequestError("A credit sale must leave a positive balance; choose a regular payment method if paid in full.");
       }
       const balanceAmount = roundPkr(totalAmount - paidNow);
-      const invoiceNumber = await generateInvoiceNumber(tx);
+      const invoiceNumber = await generateDepartmentInvoiceNumber(tx, "PHARMACY");
       const invoice = await tx.invoice.create({
         data: {
           invoiceNumber, patientId: patient?.id ?? null, createdBy: actor.sub,
+          department: "PHARMACY",
           status: balanceAmount === 0 ? "PAID" : paidNow === 0 ? "UNPAID" : "PARTIAL",
           subtotal, discountAmount, taxAmount: input.tax, grandTotal: totalAmount, paidAmount: paidNow, balanceAmount,
-          items: { create: allocated.map((item) => ({ itemType: "MEDICINE", description: `${item.medicineId} / batch ${item.batchId}`, quantity: item.quantity, unitPrice: item.unitPrice, discount: item.discount, subtotal: item.subtotal })) },
+          items: { create: allocated.map((item) => ({
+            itemType: "MEDICINE",
+            description: `${item.medicineId} / batch ${item.batchId}`,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            discount: item.discount,
+            subtotal: item.subtotal,
+            sourceType: "MEDICINE_BATCH",
+            sourceId: item.batchId,
+            sourceDepartment: "PHARMACY",
+          })) },
         }, include: { items: true },
       });
       if (isCreditSale) {
@@ -1524,7 +1579,7 @@ export const pharmacyService = {
     return sale.invoice;
   },
 
-  async getPharmacyInvoice(actor: AccessTokenPayload, invoiceId: string, req?: Request) {
+  async getPharmacyInvoice(actor: AccessTokenPayload, invoiceId: string, _req?: Request) {
     const invoice = await prisma.invoice.findUnique({
       where: { id: invoiceId },
       include: {
@@ -1555,8 +1610,35 @@ export const pharmacyService = {
     });
     const dispensedByIds = [...new Set(movementActors.map((movement) => movement.createdBy))];
     const dispensedBy = await prisma.user.findMany({ where: { id: { in: dispensedByIds } }, select: { id: true, name: true } });
-    await writeAuditLog({ userId: actor.sub, action: "VIEW", module: "pharmacy", entityType: "Invoice", entityId: invoiceId, req });
-    return { ...invoice, pharmacySale: { ...invoice.pharmacySale, dispensedBy } };
+
+    let prescription = null;
+    const rxPayment = invoice.payments.find((p) => p.notes && p.notes.includes("prescription"));
+    if (rxPayment?.notes) {
+      const match = rxPayment.notes.match(/prescription\s+([a-zA-Z0-9_-]+)/i);
+      if (match?.[1]) {
+        prescription = await prisma.prescription.findUnique({
+          where: { id: match[1] },
+          select: { id: true, visitNumber: true, createdAt: true },
+        });
+      }
+    }
+    if (!prescription) {
+      const move = await prisma.stockMovement.findFirst({
+        where: { referenceType: "pharmacy_sale", referenceId: invoice.pharmacySale.id, reason: { contains: "Prescription" } },
+        select: { reason: true },
+      });
+      if (move?.reason) {
+        const match = move.reason.match(/prescription\s+([a-zA-Z0-9_-]+)/i);
+        if (match?.[1]) {
+          prescription = await prisma.prescription.findUnique({
+            where: { id: match[1] },
+            select: { id: true, visitNumber: true, createdAt: true },
+          });
+        }
+      }
+    }
+
+    return { ...invoice, prescription, pharmacySale: { ...invoice.pharmacySale, dispensedBy, prescription } };
   },
 
   async voidSale(actor: AccessTokenPayload, invoiceId: string, reason: string, req?: Request) {
@@ -1712,9 +1794,17 @@ export const pharmacyService = {
         where: { invoiceId, type: "SALE_ON_CREDIT" },
         select: { accountId: true },
       });
-      if (creditEntry) {
-        const creditReduction = Math.min(refundAmount, Number(invoice.balanceAmount));
-        if (creditReduction > 0) {
+      const creditReduction = creditEntry ? Math.min(refundAmount, Number(invoice.balanceAmount)) : 0;
+      const cashRefund = roundPkr(refundAmount - creditReduction);
+      const [payments, refunds] = await Promise.all([
+        tx.payment.aggregate({ where: { invoiceId, type: "PAYMENT", deletedAt: null }, _sum: { amount: true } }),
+        tx.payment.aggregate({ where: { invoiceId, type: "REFUND", deletedAt: null }, _sum: { amount: true } }),
+      ]);
+      const availablePaid = roundPkr(Number(payments._sum.amount ?? 0) - Number(refunds._sum.amount ?? 0));
+      if (cashRefund > availablePaid) {
+        throw new BadRequestError("The return exceeds the amount actually paid on this pharmacy invoice.");
+      }
+      if (creditEntry && creditReduction > 0) {
           await appendPharmacyLedgerEntry(tx, {
             accountId: creditEntry.accountId,
             type: "ADJUSTMENT",
@@ -1723,12 +1813,45 @@ export const pharmacyService = {
             notes: `Credit reduced for return: ${input.reason}`,
             createdBy: actor.sub,
           });
-          await tx.invoice.update({
-            where: { id: invoiceId },
-            data: { balanceAmount: { decrement: roundPkr(creditReduction) } },
-          });
-        }
       }
+      if (cashRefund > 0) {
+        const refund = await tx.payment.create({
+          data: {
+            invoiceId,
+            type: "REFUND",
+            paymentMethod: invoice.pharmacySale.paymentMethod === "CREDIT" ? "CASH" : invoice.pharmacySale.paymentMethod,
+            amount: cashRefund,
+            reason: input.reason,
+            notes: "Refund issued for pharmacy sale return",
+            createdBy: actor.sub,
+          },
+        });
+        await writeAuditLog({
+          userId: actor.sub,
+          action: "UPDATE",
+          module: "billing",
+          entityType: "Payment",
+          entityId: refund.id,
+          newValues: refund,
+          req,
+        }, tx);
+      }
+      const updatedGrandTotal = roundPkr(Number(invoice.grandTotal) - refundAmount);
+      const updatedPaidAmount = roundPkr(Number(invoice.paidAmount) - cashRefund);
+      const updatedBalance = roundPkr(Number(invoice.balanceAmount) - creditReduction);
+      await tx.invoice.update({
+        where: { id: invoiceId },
+        data: {
+          grandTotal: updatedGrandTotal,
+          paidAmount: updatedPaidAmount,
+          balanceAmount: updatedBalance,
+          ...(cashRefund > 0 ? {
+            status: updatedGrandTotal === 0 && updatedPaidAmount === 0 ? "REFUNDED" : "PARTIALLY_REFUNDED",
+          } : {
+            status: updatedBalance === 0 ? "PAID" : updatedPaidAmount === 0 ? "UNPAID" : "PARTIAL",
+          }),
+        },
+      });
       for (const line of returnLines) {
         if (line.returnedToStock) {
           await tx.medicineBatch.update({ where: { id: line.batchId }, data: { stockQuantity: { increment: line.quantity } } });
@@ -1882,6 +2005,12 @@ export const pharmacyService = {
         message: `${batch.medicine.name} (batch ${batch.batchNumber}) is at or below reorder level (${batch.stockQuantity}/${batch.reorderLevel})`,
         relatedEntityType: "MedicineBatch",
         relatedEntityId: batch.id,
+        variables: {
+          medicineName: batch.medicine.name,
+          batchNumber: batch.batchNumber,
+          stockQuantity: batch.stockQuantity,
+          reorderLevel: batch.reorderLevel,
+        },
       });
     }
   },

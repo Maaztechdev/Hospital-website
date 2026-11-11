@@ -10,6 +10,8 @@ const prisma = new PrismaClient({
 
 export async function createPrintE2EFixture() {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const dateOffset = Number.parseInt(suffix.replace(/\D/g, "").slice(-8), 10) % 3650 + 1;
+  const appointmentDate = new Date(Date.UTC(2035, 0, 1 + dateOffset));
   const admin = await prisma.user.findUnique({ where: { email: "admin@careplus.local" } });
   const doctorUser = await prisma.user.findUnique({ where: { email: "dr.ahmed@careplus.local" } });
   if (!admin || !doctorUser) throw new Error("Seeded admin and doctor users are required for print E2E fixtures");
@@ -34,10 +36,11 @@ export async function createPrintE2EFixture() {
       patientId: patient.id,
       doctorId: doctor.id,
       departmentId: doctor.departmentId,
-      appointmentDate: new Date(),
-      timeSlot: new Date("1970-01-01T10:00:00.000Z"),
+      appointmentDate,
+      timeSlot: new Date(Date.UTC(1970, 0, 1, Number.parseInt(suffix.replace(/\D/g, "").slice(-4), 10) % 24, Number.parseInt(suffix.replace(/\D/g, "").slice(-2), 10))),
       tokenNumber: Number(Date.now().toString().slice(-8)),
       appointmentType: "CONSULTATION",
+      gender: patient.gender,
       status: "COMPLETED",
       source: "WALK_IN",
       createdBy: admin.id,
@@ -82,16 +85,6 @@ export async function createPrintE2EFixture() {
   const ward = await prisma.ward.create({ data: { wardName: `Print E2E ${suffix}`, wardType: "GENERAL", dailyRate: 5000, capacity: 1 } });
   const room = await prisma.room.create({ data: { wardId: ward.id, roomNumber: `PE-${suffix}` } });
   const bed = await prisma.bed.create({ data: { roomId: room.id, bedNumber: "P-1", dailyRate: 5000, status: "OCCUPIED" } });
-  const invoice = await prisma.invoice.create({
-    data: {
-      invoiceNumber: `PRINT-${suffix}`,
-      patientId: patient.id,
-      createdBy: admin.id,
-      status: "UNPAID",
-      grandTotal: 100,
-      balanceAmount: 100,
-    },
-  });
   const admission = await prisma.admission.create({
     data: {
       patientId: patient.id,
@@ -100,6 +93,29 @@ export async function createPrintE2EFixture() {
       admissionType: "PLANNED",
       admissionReason: "Print document fixture",
       createdBy: admin.id,
+    },
+  });
+  const invoice = await prisma.invoice.create({
+    data: {
+      invoiceNumber: `PRINT-${suffix}`,
+      patientId: patient.id,
+      admissionId: admission.id,
+      department: "IPD",
+      createdBy: admin.id,
+      status: "UNPAID",
+      grandTotal: 100,
+      balanceAmount: 100,
+      items: {
+        create: {
+          itemType: "OTHER",
+          description: "Print fixture IPD charge",
+          quantity: 1,
+          unitPrice: 100,
+          subtotal: 100,
+          admissionId: admission.id,
+          serviceCategory: "OTHER",
+        },
+      },
     },
   });
   return {
@@ -119,11 +135,13 @@ export async function createPrintE2EFixture() {
 
 export async function deletePrintE2EFixture(fixture: Awaited<ReturnType<typeof createPrintE2EFixture>>) {
   await prisma.auditLog.deleteMany({ where: { entityId: fixture.admissionId } });
+  await prisma.invoiceItem.deleteMany({ where: { invoiceId: fixture.invoiceId } });
   await prisma.invoice.deleteMany({ where: { id: fixture.invoiceId } });
   await prisma.prescription.deleteMany({ where: { id: fixture.prescriptionId } });
   await prisma.consultation.deleteMany({ where: { id: fixture.consultationId } });
   await prisma.admission.deleteMany({ where: { id: fixture.admissionId } });
   await prisma.appointment.deleteMany({ where: { id: fixture.appointmentId } });
+  await prisma.bedRateHistory.deleteMany({ where: { bedId: fixture.bedId } });
   await prisma.bed.deleteMany({ where: { id: fixture.bedId } });
   await prisma.room.deleteMany({ where: { id: fixture.roomId } });
   await prisma.ward.deleteMany({ where: { id: fixture.wardId } });

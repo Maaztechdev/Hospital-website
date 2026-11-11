@@ -15,5 +15,7 @@ test("pharmacy billing page is available and legacy sale modal remains reachable
   await expect(page.getByLabel("Tax amount (PKR)")).toBeVisible()
 
   await page.goto("/dashboard/pharmacy/legacy-sale")
-  await expect(page.getByRole("heading", { name: "New Pharmacy Sale" })).toBeVisible()
+  await expect(page.getByRole("tab", { name: "Work items" })).toHaveAttribute("aria-selected", "true")
+  await page.getByRole("button", { name: "New Sale" }).first().click()
+  await expect(page.getByRole("heading", { name: "Pharmacy Billing" })).toBeVisible()
 })

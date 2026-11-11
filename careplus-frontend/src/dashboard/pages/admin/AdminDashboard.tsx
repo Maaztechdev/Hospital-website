@@ -1,8 +1,8 @@
 import * as React from "react"
 import { useNavigate } from "react-router-dom"
 import {
-  Users, CalendarCheck, Clock, BedDouble, DollarSign, Wallet, FlaskConical,
-  Syringe, PackageX, Hourglass,
+  Users, CalendarCheck, Clock, BedDouble, DollarSign, Wallet, FlaskConical, Receipt,
+  Syringe, PackageX, Hourglass, RotateCcw,
 } from "lucide-react"
 import { StatCard } from "@/dashboard/components/StatCard"
 import { DataTable } from "@/dashboard/components/DataTable"
@@ -12,7 +12,7 @@ import { useDashboard } from "@/dashboard/store/useDashboard"
 import { formatCurrency, formatDate, getHospitalDateKey } from "@/dashboard/lib/format"
 import { LineChartWidget, BarChartWidget, DonutChartWidget } from "@/dashboard/components/charts/Charts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { api, type ApiError } from "@/lib/api"
+import { api, type ApiBillingSummary, type ApiError } from "@/lib/api"
 
 export default function AdminDashboard() {
   const { patients, appointments, labOrders, medicines, invoices } = useDashboard()
@@ -21,16 +21,19 @@ export default function AdminDashboard() {
     admitted: 0,
     availableBeds: 0,
     todaysRevenue: 0,
+    todaysInvoiced: 0,
     pendingPayments: 0,
     lowStock: 0,
     pendingLab: 0,
     otSurgeries: 0,
   })
   const [appointmentStats, setAppointmentStats] = React.useState<Array<{ status: string; count: number }>>([])
-  const [revenueTrend, setRevenueTrend] = React.useState<Array<{ label: string; value: number }>>([])
+  const [revenueTrend, setRevenueTrend] = React.useState<Array<{ label: string; collected: number; invoiced: number }>>([])
   const [departmentDistribution, setDepartmentDistribution] = React.useState<Array<{ label: string; value: number }>>([])
   const [surgeries, setSurgeries] = React.useState<Array<{ id: string; patient: string; procedure: string; surgeon: string; time: string }>>([])
   const [summaryError, setSummaryError] = React.useState<string | null>(null)
+  const [ipdSummary, setIpdSummary] = React.useState<ApiBillingSummary | null>(null)
+  const [ipdSummaryError, setIpdSummaryError] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     let cancelled = false
@@ -63,6 +66,7 @@ export default function AdminDashboard() {
           admitted,
           availableBeds,
           todaysRevenue: revenueSummary.totalCollected,
+          todaysInvoiced: revenueSummary.totalInvoiced,
           pendingPayments: revenueSummary.totalOutstanding,
           lowStock: 0,
           pendingLab: 0,
@@ -76,12 +80,24 @@ export default function AdminDashboard() {
     return () => { cancelled = true }
   }, [])
 
+  React.useEffect(() => {
+    let cancelled = false
+    const date = getHospitalDateKey()
+    api.getBillingSummary(date, date)
+      .then((summary) => { if (!cancelled) setIpdSummary(summary) })
+      .catch((error: ApiError) => {
+        if (!cancelled) setIpdSummaryError(error.message || "Unable to load IPD billing totals")
+      })
+    return () => { cancelled = true }
+  }, [])
+
   const today = getHospitalDateKey()
   const todaysAppointments = appointments.filter((a) => a.date === today)
   const pendingApprovals = appointments.filter((a) => a.status === "Pending Approval")
   const admitted = dashboardSummary.admitted || 0
   const availableBeds = dashboardSummary.availableBeds || 0
   const todaysRevenue = dashboardSummary.todaysRevenue || 0
+  const todaysInvoiced = dashboardSummary.todaysInvoiced || 0
   const pendingPayments = dashboardSummary.pendingPayments || 0
   const lowStock = medicines.filter((m) => m.status === "Low Stock" || m.status === "Out of Stock").length
   const pendingLab = labOrders.filter((l) => l.status !== "Verified").length
@@ -101,18 +117,43 @@ export default function AdminDashboard() {
         <StatCard label="Pending Approvals" value={pendingApprovals.length.toString()} icon={Clock} tone="warning" onClick={() => navigate("/dashboard/appointments")} />
         <StatCard label="Admitted Patients" value={admitted.toString()} icon={BedDouble} tone="primary" />
         <StatCard label="Available Beds" value={availableBeds.toString()} icon={BedDouble} tone="success" />
-        <StatCard label="Today's Revenue" value={formatCurrency(todaysRevenue)} icon={DollarSign} tone="success" onClick={() => navigate("/dashboard/billing")} />
+        <StatCard label="Today's Collected" value={formatCurrency(todaysRevenue)} icon={DollarSign} tone="success" onClick={() => navigate("/dashboard/billing")} />
+        <StatCard label="Today's Invoiced" value={formatCurrency(todaysInvoiced)} icon={Receipt} tone="primary" onClick={() => navigate("/dashboard/billing")} />
         <StatCard label="Pending Payments" value={formatCurrency(pendingPayments)} icon={Wallet} tone="warning" onClick={() => navigate("/dashboard/billing")} />
         <StatCard label="Low Stock Medicines" value={lowStock.toString()} icon={PackageX} tone="critical" onClick={() => navigate("/dashboard/pharmacy")} />
         <StatCard label="Pending Lab Tests" value={pendingLab.toString()} icon={FlaskConical} tone="warning" onClick={() => navigate("/dashboard/lab")} />
         <StatCard label="Today's OT Surgeries" value={otSurgeries.toString()} icon={Syringe} tone="primary" />
       </div>
+      {(() => {
+        const ipd = ipdSummary?.departments.find((entry) => entry.department === "IPD")
+        const ipdValues = [
+          { label: "IPD Invoiced", value: ipd?.invoiced, icon: Receipt, tone: "primary" as const },
+          { label: "IPD Collected", value: ipd?.collected, icon: Wallet, tone: "success" as const },
+          { label: "IPD Refunded", value: ipd?.refunded, icon: RotateCcw, tone: "warning" as const },
+          { label: "IPD Outstanding", value: ipd?.outstanding, icon: Hourglass, tone: "warning" as const },
+        ]
+        return (
+          <section aria-label="IPD billing totals">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-[var(--cp-ink)]">IPD billing · today</h2>
+              <button type="button" className="inline-flex min-h-10 items-center text-xs font-semibold text-[var(--cp-primary)] hover:underline" onClick={() => navigate("/dashboard/billing?department=IPD")}>Open IPD billing</button>
+            </div>
+            {ipdSummaryError ? <p role="alert" className="mb-2 text-xs text-[var(--cp-critical)]">{ipdSummaryError}</p> : null}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {ipdValues.map((item) => <StatCard key={item.label} label={item.label} value={ipdSummary ? formatCurrency(Number(item.value ?? 0)) : "—"} icon={item.icon} tone={item.tone} />)}
+            </div>
+          </section>
+        )
+      })()}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader><CardTitle>Weekly Revenue</CardTitle></CardHeader>
           <CardContent>
-            {revenueTrend.some((point) => point.value > 0) ? <LineChartWidget data={revenueTrend} /> : <p className="flex h-[200px] items-center justify-center text-sm text-[var(--cp-ink-soft)]">No revenue recorded in the last seven days.</p>}
+            {revenueTrend.some((point) => point.collected > 0 || point.invoiced > 0) ? <div className="grid gap-4 md:grid-cols-2">
+              <div><h3 className="mb-2 text-sm font-medium text-[var(--cp-ink-soft)]">Collected · payment date</h3><LineChartWidget data={revenueTrend.map(({ label, collected }) => ({ label, value: collected }))} /></div>
+              <div><h3 className="mb-2 text-sm font-medium text-[var(--cp-ink-soft)]">Invoiced · invoice date</h3><LineChartWidget data={revenueTrend.map(({ label, invoiced }) => ({ label, value: invoiced }))} /></div>
+            </div> : <p className="flex h-[200px] items-center justify-center text-sm text-[var(--cp-ink-soft)]">No revenue recorded in the last seven days.</p>}
           </CardContent>
         </Card>
         <Card>

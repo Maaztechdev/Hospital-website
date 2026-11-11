@@ -59,6 +59,7 @@ router.patch(
 );
 
 router.delete("/:id", requireRole(["ADMIN"]), validate({ params: idParamSchema }), patientsController.remove);
+router.post("/:id/restore", requireRole(["ADMIN"]), validate({ params: idParamSchema }), patientsController.restore);
 
 /**
  * @openapi

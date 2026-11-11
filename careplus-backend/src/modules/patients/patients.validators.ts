@@ -20,6 +20,7 @@ export const createPatientSchema = z.object({
   emergencyContactName: z.string().optional(),
   emergencyContactPhone: z.string().optional(),
   notes: z.string().max(2000).optional(),
+  force: z.boolean().optional(),
 });
 
 export const updatePatientSchema = createPatientSchema.partial();

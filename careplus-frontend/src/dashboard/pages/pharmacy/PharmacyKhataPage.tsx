@@ -10,6 +10,7 @@ import { formatCurrency, formatDateTime } from "@/dashboard/lib/format"
 import { api, type ApiPharmacyLedger, type ApiPharmacyLedgerAccount, type ApiPharmacyLedgerEntry, type ApiPatient } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { useHospitalProfile } from "@/lib/hospitalProfile"
+import { printElement } from "@/lib/print"
 
 type AccountType = "RECEIVABLE" | "PAYABLE"
 type LedgerReceipt = { accountName: string; entry: ApiPharmacyLedgerEntry }
@@ -201,8 +202,7 @@ export default function PharmacyKhataPage() {
 
   React.useEffect(() => {
     if (!receipt) return
-    const frame = window.requestAnimationFrame(() => window.print())
-    return () => window.cancelAnimationFrame(frame)
+    void printElement("pharmacy-print-root").catch(() => {})
   }, [receipt])
 
   return <div className="flex flex-col gap-4">
@@ -276,7 +276,7 @@ export default function PharmacyKhataPage() {
       <div className="space-y-3"><p className="text-xs text-[var(--cp-ink-soft)]">Use a positive amount to increase the balance or a negative amount to reduce it.</p><div><Label htmlFor="khata-adjust-amount">Adjustment (PKR)</Label><Input id="khata-adjust-amount" type="number" step="0.01" value={adjustmentAmount} onChange={(event) => setAdjustmentAmount(event.target.value)} /></div><div><Label htmlFor="khata-adjust-note">Reason (required)</Label><Input id="khata-adjust-note" value={adjustmentNotes} onChange={(event) => setAdjustmentNotes(event.target.value)} maxLength={500} /></div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setAdjustmentOpen(false)}>Cancel</Button><Button disabled={busy} onClick={() => void submitAdjustment()}>{busy ? "Saving…" : "Save adjustment"}</Button></div></div>
     </Modal>
 
-    {receipt && <div className="fixed bottom-4 right-4 z-50 flex gap-2 rounded-xl border bg-white p-3 shadow-lg print:hidden"><span className="self-center text-sm">Payment receipt ready</span><Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print receipt</Button><Button size="sm" onClick={() => setReceipt(null)}>Done</Button></div>}
+    {receipt && <div className="fixed bottom-4 right-4 z-50 flex gap-2 rounded-xl border bg-white p-3 shadow-lg print:hidden"><span className="self-center text-sm">Payment receipt ready</span><Button size="sm" variant="outline" onClick={() => void printElement("pharmacy-print-root")}><Printer className="h-4 w-4" /> Print receipt</Button><Button size="sm" onClick={() => setReceipt(null)}>Done</Button></div>}
     {receipt && <PharmacyKhataReceipt receipt={receipt} />}
   </div>
 }

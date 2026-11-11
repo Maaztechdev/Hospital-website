@@ -26,8 +26,15 @@ export default function OPDQueue() {
 
   React.useEffect(() => {
     void loadQueue()
-    const t = setInterval(() => { void loadQueue(); forceTick((n) => n + 1) }, 10000)
-    return () => clearInterval(t)
+    const t = setInterval(() => { void loadQueue(); forceTick((n) => n + 1) }, 30000)
+    const handleInvalidation = () => { void loadQueue() }
+    window.addEventListener("careplus:data-invalidated", handleInvalidation)
+    window.addEventListener("focus", handleInvalidation)
+    return () => {
+      clearInterval(t)
+      window.removeEventListener("careplus:data-invalidated", handleInvalidation)
+      window.removeEventListener("focus", handleInvalidation)
+    }
   }, [loadQueue])
 
   const queue = queueAppointments
@@ -84,6 +91,8 @@ export default function OPDQueue() {
     } catch (error) { toast({ title: "Unable to requeue patient", description: (error as ApiError).message, variant: "error" }) }
   }
 
+  const ownDoctorId = currentUser?.role === "doctor" ? doctors.find((doctor) => doctor.userId === currentUser?.id)?.id : null
+
   return (
     <div className="flex flex-col gap-4">
       <DashboardPageHeader title="OPD Queue" />
@@ -117,7 +126,7 @@ export default function OPDQueue() {
                   <div>
                     <p className="cp-tabular text-2xl font-black text-[var(--cp-ink)]">#{a.token}</p>
                     <p className="text-sm font-semibold text-[var(--cp-ink)]">{a.patientName}</p>
-                    <p className="cp-tabular text-xs text-[var(--cp-ink-faint)]">{a.mrNumber}</p>
+                    <p className="cp-tabular text-xs text-[var(--cp-ink-faint)]">{a.mrNumber}{a.gender ? ` • ${a.gender}` : ""}{a.age != null ? ` (${a.age}y)` : ""}</p>
                     <p className="text-xs text-[var(--cp-ink-soft)]">{a.doctorName} · {a.type}</p>
                   </div>
                   <div className="flex flex-col items-end gap-1.5">
@@ -128,13 +137,13 @@ export default function OPDQueue() {
                 <p className="cp-tabular mt-3 text-xs text-[var(--cp-ink-soft)]">
                   Waiting: <span className="font-semibold text-[var(--cp-ink)]">{a.status === "Waiting" ? formatWaitingTime(a.waitingSince) : "—"}</span>
                 </p>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {currentUser && ["admin", "receptionist", "doctor", "nurse"].includes(currentUser.role) && a.status === "Confirmed" && <button onClick={() => callNext(a)} className="inline-flex items-center gap-1 rounded-lg bg-[var(--cp-accent)] px-2.5 py-1.5 text-xs font-semibold text-white hover:brightness-110"><PhoneCall className="h-3.5 w-3.5" /> Call Next</button>}
-                  {currentUser && ["admin", "doctor"].includes(currentUser.role) && a.status !== "In Consultation" && <button onClick={() => startConsultation(a)} className="inline-flex items-center gap-1 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-2.5 py-1.5 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><PlayCircle className="h-3.5 w-3.5" /> Start</button>}
-                  {currentUser && ["admin", "doctor"].includes(currentUser.role) && <button onClick={() => markDone(a)} className="inline-flex items-center gap-1 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-2.5 py-1.5 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><CheckCircle2 className="h-3.5 w-3.5" /> Done</button>}
-                  {currentUser && ["admin", "receptionist"].includes(currentUser.role) && <button onClick={() => skip(a)} className="inline-flex items-center gap-1 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-2.5 py-1.5 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><SkipForward className="h-3.5 w-3.5" /> Skip</button>}
-                  {currentUser && ["admin", "receptionist"].includes(currentUser.role) && a.status === "Confirmed" && <button onClick={() => reschedule(a)} className="inline-flex items-center gap-1 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-2.5 py-1.5 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><RotateCcw className="h-3.5 w-3.5" /> Reschedule</button>}
-                  {currentUser && ["admin", "receptionist", "nurse"].includes(currentUser.role) && a.status === "Waiting" && <button onClick={() => requeue(a)} className="inline-flex items-center gap-1 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-2.5 py-1.5 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><RotateCcw className="h-3.5 w-3.5" /> Requeue</button>}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {currentUser && ["admin", "receptionist", "doctor", "nurse"].includes(currentUser.role) && a.status === "Confirmed" && <button onClick={() => callNext(a)} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-[var(--cp-accent)] px-3 py-2 text-xs font-semibold text-white hover:brightness-110"><PhoneCall className="h-4 w-4" /> Call Next</button>}
+                  {currentUser && ["admin", "doctor"].includes(currentUser.role) && a.status !== "In Consultation" && <button onClick={() => startConsultation(a)} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-3 py-2 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><PlayCircle className="h-4 w-4" /> Start</button>}
+                  {currentUser && ["admin", "doctor"].includes(currentUser.role) && <button onClick={() => markDone(a)} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-3 py-2 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><CheckCircle2 className="h-4 w-4" /> Done</button>}
+                  {currentUser && (["admin", "receptionist"].includes(currentUser.role) || (currentUser.role === "doctor" && a.status === "Waiting" && (!ownDoctorId || a.doctorId === ownDoctorId))) && <button onClick={() => skip(a)} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-3 py-2 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><SkipForward className="h-4 w-4" /> Skip</button>}
+                  {currentUser && ["admin", "receptionist"].includes(currentUser.role) && a.status === "Confirmed" && <button onClick={() => reschedule(a)} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-3 py-2 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><RotateCcw className="h-4 w-4" /> Reschedule</button>}
+                  {currentUser && (["admin", "receptionist", "nurse"].includes(currentUser.role) || (currentUser.role === "doctor" && (!ownDoctorId || a.doctorId === ownDoctorId))) && a.status === "Waiting" && <button onClick={() => requeue(a)} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-[var(--cp-border)] bg-[var(--cp-bg)] px-3 py-2 text-xs font-semibold text-[var(--cp-ink)] hover:bg-[var(--cp-primary-light)]"><RotateCcw className="h-4 w-4" /> Requeue</button>}
                 </div>
               </div>
             ))}

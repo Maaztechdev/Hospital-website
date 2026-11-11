@@ -24,7 +24,20 @@ function dateAtHospitalTime(date: string, time: string) {
   return new Date(`${date}T${time}:00+05:00`)
 }
 
-async function apiJson<T>(response: Awaited<ReturnType<APIRequestContext["get"]>>): Promise<T> {
+async function safeGet(request: APIRequestContext, url: string, options?: any) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await request.get(url, options)
+    } catch (e) {
+      if (attempt === 2) throw e
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  }
+  throw new Error(`Failed to GET ${url}`)
+}
+
+async function apiJson<T>(responsePromise: Promise<Awaited<ReturnType<APIRequestContext["get"]>>> | Awaited<ReturnType<APIRequestContext["get"]>>): Promise<T> {
+  const response = await responsePromise
   expect(response.ok(), await response.text()).toBeTruthy()
   return (await response.json()).data as T
 }
@@ -48,7 +61,7 @@ async function createPatient(request: APIRequestContext, headers: Record<string,
   return (await response.json()).data as FixturePatient
 }
 
-async function createAppointmentsForToday(
+async function createAppointmentsForQueue(
   request: APIRequestContext,
   headers: Record<string, string>,
   doctor: { id: string; department: { id: string } },
@@ -62,7 +75,7 @@ async function createAppointmentsForToday(
   for (let offset = 1; offset <= 45 && slots.length < 3; offset += 1) {
     const target = new Date(Date.now() + offset * 86_400_000)
     const date = hospitalDate(target)
-    const response = await request.get(`${apiBase}/appointments/doctors/${doctor.id}/slots?date=${date}`, { headers })
+    const response = await safeGet(request, `${apiBase}/appointments/doctors/${doctor.id}/slots?date=${date}`, { headers })
     const data = await apiJson<{ availableSlots: string[] }>(response)
     if (data.availableSlots.length >= 3) {
       targetDate = date
@@ -84,6 +97,7 @@ async function createAppointmentsForToday(
         appointmentType: index === 2 ? "FOLLOW_UP" : "CONSULTATION",
         source: "WALK_IN",
         reason: `Doctor full flow ${index === 0 ? "A" : index === 1 ? "B" : "repeat"} ${suffix}`,
+        feePaid: true,
       },
     })
     expect(response.ok(), await response.text()).toBeTruthy()
@@ -92,20 +106,6 @@ async function createAppointmentsForToday(
     onCreated(appointment.id)
   }
 
-  const today = hospitalDate(new Date())
-  const todayStart = new Date(`${today}T00:00:00.000Z`)
-  const existing = await prisma.appointment.findMany({
-    where: { doctorId: doctor.id, appointmentDate: todayStart },
-    select: { id: true, tokenNumber: true, status: true },
-  })
-  let token = existing.reduce((maximum, appointment) => Math.max(maximum, appointment.tokenNumber), 0) + 1
-  for (const appointment of appointments) {
-    appointment.tokenNumber = token
-    await prisma.appointment.update({
-      where: { id: appointment.id },
-      data: { appointmentDate: todayStart, tokenNumber: token++ },
-    })
-  }
   return appointments
 }
 
@@ -153,17 +153,17 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
   let patientA: FixturePatient | undefined
   let patientB: FixturePatient | undefined
   let appointmentIds: string[] = []
-  let originalQueueStatuses: Array<{ id: string; status: "CONFIRMED" | "WAITING" }> = []
+  let originalQueueStatuses: Array<{ id: string; status: "PENDING_APPROVAL" | "CONFIRMED" | "WAITING" | "IN_CONSULTATION" }> = []
   let admissionId: string | undefined
   let completedConsultationId: string | undefined
 
   try {
     const [doctors, beds, medicines, labTests, otRooms] = await Promise.all([
-      apiJson<Array<{ id: string; userId: string; name: string; user: { name: string }; department: { id: string } }>>(await request.get(`${apiBase}/appointments/doctors`, { headers: adminHeaders })),
-      apiJson<Array<{ id: string; status: string }>>(await request.get(`${apiBase}/wards/beds/availability`, { headers: adminHeaders })),
-      apiJson<Array<{ id: string; name: string; strength: string | null; form: string | null; isActive: boolean }>>(await request.get(`${apiBase}/pharmacy/medicines?limit=200`, { headers: adminHeaders })),
-      apiJson<Array<{ id: string; testName: string; isActive: boolean }>>(await request.get(`${apiBase}/lab/tests`, { headers: adminHeaders })),
-      apiJson<Array<{ id: string; name: string }>>(await request.get(`${apiBase}/ot/rooms`, { headers: adminHeaders })),
+      apiJson<Array<{ id: string; userId: string; name: string; user: { name: string }; department: { id: string } }>>(safeGet(request, `${apiBase}/appointments/doctors`, { headers: adminHeaders })),
+      apiJson<Array<{ id: string; status: string }>>(safeGet(request, `${apiBase}/wards/beds/availability`, { headers: adminHeaders })),
+      apiJson<Array<{ id: string; name: string; strength: string | null; form: string | null; isActive: boolean }>>(safeGet(request, `${apiBase}/pharmacy/medicines?search=Panadol`, { headers: adminHeaders })),
+      apiJson<Array<{ id: string; testName: string; isActive: boolean }>>(safeGet(request, `${apiBase}/lab/tests`, { headers: adminHeaders })),
+      apiJson<Array<{ id: string; name: string }>>(safeGet(request, `${apiBase}/ot/rooms`, { headers: adminHeaders })),
     ])
     const doctor = doctors.find((item) => item.userId === doctorSession.user.id)
     const medicine = medicines.find((item) => item.name.toLowerCase().includes("panadol") && item.isActive !== false) ?? medicines.find((item) => item.isActive !== false)
@@ -178,9 +178,8 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
 
     patientA = await createPatient(request, adminHeaders, `A-${suffix}`, [])
     patientB = await createPatient(request, adminHeaders, `B-${suffix}`, ["Penicillin"])
-    const todayStart = new Date(`${hospitalDate(new Date())}T00:00:00.000Z`)
     const existingQueue = await prisma.appointment.findMany({
-      where: { doctorId: doctor!.id, appointmentDate: todayStart, status: { in: ["CONFIRMED", "WAITING"] } },
+      where: { doctorId: doctor!.id, status: { notIn: ["COMPLETED", "CANCELLED", "NO_SHOW", "EXPIRED"] } },
       select: { id: true, status: true },
     })
     originalQueueStatuses = existingQueue as typeof originalQueueStatuses
@@ -190,7 +189,7 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
         data: { status: "COMPLETED" },
       })
     }
-    const appointments = await createAppointmentsForToday(request, adminHeaders, doctor!, patientA, patientB, suffix, (id) => appointmentIds.push(id))
+    const appointments = await createAppointmentsForQueue(request, adminHeaders, doctor!, patientA, patientB, suffix, (id) => appointmentIds.push(id))
 
     await context.addInitScript(() => {
       Object.defineProperty(window, "__printCallCount", { configurable: true, writable: true, value: 0 })
@@ -222,8 +221,11 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
     }
 
     async function completeSignedConsultation() {
+      page.once("dialog", async (dialog) => {
+        expect(dialog.message()).toContain("Complete this consultation?")
+        await dialog.accept()
+      })
       await page.getByRole("button", { name: "Complete Consultation" }).click()
-      await page.getByRole("dialog").getByRole("button", { name: "Complete Consultation" }).click()
       await expect(page.getByText(/visit has been marked done/i)).toBeVisible()
     }
 
@@ -233,7 +235,7 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
     await expect(page.getByText("Prescription signed", { exact: true })).toBeVisible()
     await completeSignedConsultation()
     const aConsultations = await apiJson<Array<{ id: string; bpSystolic: number | null; pulse: number | null; oxygenSaturation: number | null }>>(
-      await request.get(`${apiBase}/consultations?appointmentId=${appointments[0].id}`, { headers: doctorHeaders }),
+      safeGet(request, `${apiBase}/consultations?appointmentId=${appointments[0].id}`, { headers: doctorHeaders }),
     )
     expect(aConsultations).toHaveLength(1)
     expect(aConsultations[0]).toMatchObject({ bpSystolic: null, pulse: null, oxygenSaturation: null })
@@ -257,13 +259,13 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
     await expect(page.getByText("Prescription signed", { exact: true })).toBeVisible()
     await completeSignedConsultation()
 
-    const consultationResponse = await request.get(`${apiBase}/consultations?appointmentId=${appointments[1].id}`, { headers: doctorHeaders })
+    const consultationResponse = await safeGet(request, `${apiBase}/consultations?appointmentId=${appointments[1].id}`, { headers: doctorHeaders })
     const consultationRows = await apiJson<Array<{ id: string; isCritical: boolean; criticalConfirmed: boolean }>>(consultationResponse)
     expect(consultationRows).toHaveLength(1)
     completedConsultationId = consultationRows[0].id
     expect(consultationRows[0]).toMatchObject({ isCritical: true, criticalConfirmed: true })
     const prescriptionRows = await apiJson<Array<{ id: string; consultationId: string; items: Array<{ medicineId: string | null; doseAmount: number; durationValue: number; durationUnit: string }> }>>(
-      await request.get(`${apiBase}/prescriptions?limit=100`, { headers: doctorHeaders }),
+      safeGet(request, `${apiBase}/prescriptions?limit=100`, { headers: doctorHeaders }),
     )
     const signedPrescription = prescriptionRows.find((item) => item.consultationId === completedConsultationId)
     expect(signedPrescription?.items[0]).toMatchObject({ medicineId: medicine!.id, doseAmount: 1, durationValue: 3, durationUnit: "days" })
@@ -286,7 +288,7 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
     await previousMedicines.locator("summary").click()
     await expect(previousMedicines.getByText(medicine!.name, { exact: false }).first()).toBeVisible()
     await previousMedicines.getByRole("button", { name: "Repeat last prescription" }).click()
-    await expect(page.getByRole("combobox", { name: "Medicine 1" })).toHaveValue(new RegExp(medicine!.name))
+    await expect(page.getByLabel("Medicine 1")).toHaveValue(new RegExp(medicine!.name))
     const previousTests = page.locator("details").filter({ hasText: "Recent labs & ultrasounds" })
     await previousTests.locator("summary").click()
     await expect(previousTests.getByText(labTest!.testName, { exact: false })).toBeVisible()
@@ -305,12 +307,12 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
     await admissionDialog.getByLabel("Reason for Admission").fill(`Doctor full-flow admission ${suffix}`)
     await admissionDialog.getByLabel("Admission notes").fill("Clinical admission notes from the doctor.")
     await admissionDialog.getByRole("button", { name: "Admit Patient" }).click()
-    await expect(admissionDialog.getByText("Admission Summary", { exact: true })).toBeVisible()
+    await expect(admissionDialog.getByText("Admission Complete", { exact: true })).toBeVisible()
     await expect(admissionDialog.getByText("Deposit", { exact: true })).toHaveCount(0)
     await admissionDialog.getByRole("button", { name: "Done" }).click()
 
     const admissionRows = await apiJson<Array<{ id: string; status: string; depositStatus: string }>>(
-      await request.get(`${apiBase}/wards/admissions?limit=100&patientId=${patientB.id}`, { headers: doctorHeaders }),
+      safeGet(request, `${apiBase}/wards/admissions?limit=100&patientId=${patientB.id}`, { headers: doctorHeaders }),
     )
     const admission = admissionRows.find((item) => item.status === "ACTIVE")
     expect(admission).toBeTruthy()
@@ -325,15 +327,21 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
     await page.getByRole("button", { name: "Save round note" }).click()
     await expect(page.getByText("Ward round patient reports improvement.")).toBeVisible()
 
+    const billBeforeDeposit = await apiJson<{
+      totals: { paid: number | string }
+      invoice: { payments: Array<{ purpose?: string; amount: number | string }> }
+    }>(safeGet(request, `${apiBase}/wards/admissions/${admissionId}/running-bill`, { headers: doctorHeaders }))
     const depositResponse = await request.post(`${apiBase}/wards/admissions/${admissionId}/deposits`, {
       headers: receptionistHeaders,
       data: { amount: 10_000, paymentMethod: "CASH", notes: "Doctor full-flow E2E advance deposit" },
     })
     expect(depositResponse.ok(), await depositResponse.text()).toBeTruthy()
-    const admissionAfterDeposit = await apiJson<{ outstandingBalance: number | string }>(
-      await request.get(`${apiBase}/wards/admissions/${admissionId}`, { headers: doctorHeaders }),
-    )
-    expect(Number(admissionAfterDeposit.outstandingBalance)).toBe(-10_000)
+    const billAfterDeposit = await apiJson<{
+      totals: { paid: number | string }
+      invoice: { payments: Array<{ purpose?: string; amount: number | string }> }
+    }>(safeGet(request, `${apiBase}/wards/admissions/${admissionId}/running-bill`, { headers: doctorHeaders }))
+    expect(Number(billAfterDeposit.totals.paid)).toBe(Number(billBeforeDeposit.totals.paid) + 10_000)
+    expect(billAfterDeposit.invoice.payments.some((payment) => payment.purpose === "DEPOSIT" && Number(payment.amount) === 10_000)).toBe(true)
 
     await page.goto("/dashboard/ot")
     await expect(page.getByRole("heading", { name: "Operation Theatre" })).toBeVisible()
@@ -399,6 +407,17 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
     await expect(page.getByText("Completed Today", { exact: true })).toBeVisible()
     await surgeryDetails.getByRole("button", { name: "Close", exact: true }).click()
 
+    const pendingInvoices = await prisma.invoice.findMany({
+      where: { patientId: patientB.id, status: { not: "VOID" }, balanceAmount: { gt: 0 } },
+    })
+    for (const inv of pendingInvoices) {
+      const payRes = await request.post(`${apiBase}/billing/invoices/${inv.id}/payments`, {
+        headers: receptionistHeaders,
+        data: { amount: Number(inv.balanceAmount), paymentMethod: "CASH", notes: "Clear balance before discharge" },
+      })
+      expect(payRes.ok(), await payRes.text()).toBeTruthy()
+    }
+
     await page.goto(`/dashboard/ward/round/${admissionId}`)
     await page.getByRole("button", { name: "Discharge", exact: true }).click()
     await page.locator("#discharge-diagnosis").fill("Full flow discharge diagnosis")
@@ -426,7 +445,7 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
     }
     await page.getByRole("tab", { name: "Visits", exact: true }).click()
     await expect(page.getByText(`Token #${appointments[1].tokenNumber}`)).toBeVisible()
-    await expect(page.getByText(`Token #${appointments[2].tokenNumber}`)).toBeVisible()
+    await expect(page.getByText(`Token #${appointments[2].tokenNumber}`)).toHaveCount(0)
     await expect(page.getByText(`Token #${appointments[0].tokenNumber}`)).toHaveCount(0)
     await page.getByRole("tab", { name: "Prescriptions", exact: true }).click()
     await expect(page.getByText(medicine!.name, { exact: false }).first()).toBeVisible()
@@ -468,12 +487,16 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
     await expect(warning).toBeVisible({ timeout: 4_000 })
   } finally {
     const patientIds = [patientA?.id, patientB?.id].filter((id): id is string => Boolean(id))
-    await prisma.$transaction(async (tx) => {
+    let cleanupError: unknown
+    try {
+      await prisma.$transaction(async (tx) => {
       const consultations = await tx.consultation.findMany({ where: { patientId: { in: patientIds } }, select: { id: true, appointmentId: true } })
       const consultationIds = consultations.map((item) => item.id)
       const admissions = await tx.admission.findMany({ where: { patientId: { in: patientIds } }, select: { id: true, bedId: true } })
       const admissionIds = admissions.map((item) => item.id)
-      const labOrders = await tx.labOrder.findMany({ where: { patientId: { in: patientIds } }, select: { id: true } })
+      const invoices = await tx.invoice.findMany({ where: { patientId: { in: patientIds } }, select: { id: true } })
+      const invoiceIds = invoices.map((item) => item.id)
+      const labOrders = await tx.labOrder.findMany({ where: { patientId: { in: patientIds } }, select: { id: true, invoiceId: true } })
       const labOrderIds = labOrders.map((item) => item.id)
       const ultrasoundOrders = await tx.ultrasoundOrder.findMany({ where: { patientId: { in: patientIds } }, select: { id: true } })
       const ultrasoundOrderIds = ultrasoundOrders.map((item) => item.id)
@@ -493,16 +516,32 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
       if (surgeryIds.length) await tx.surgery.deleteMany({ where: { id: { in: surgeryIds } } })
       if (prescriptionIds.length) await tx.prescriptionShare.deleteMany({ where: { prescriptionId: { in: prescriptionIds } } })
       if (prescriptionIds.length) await tx.prescription.deleteMany({ where: { id: { in: prescriptionIds } } })
+      if (admissionIds.length) await tx.patientLedgerEntry.deleteMany({ where: { admissionId: { in: admissionIds } } })
       if (labOrderIds.length) {
+        await tx.$executeRaw`ALTER TABLE "lab_order_events" DISABLE TRIGGER "lab_order_events_immutable"`
+        await tx.labOrderEvent.deleteMany({ where: { labOrderId: { in: labOrderIds } } })
+        await tx.$executeRaw`ALTER TABLE "lab_order_events" ENABLE TRIGGER "lab_order_events_immutable"`
+        await tx.labSampleRejection.deleteMany({ where: { labOrderId: { in: labOrderIds } } })
+        await tx.labInventoryConsumption.deleteMany({ where: { labOrderId: { in: labOrderIds } } })
+        await tx.labLedgerEntry.deleteMany({
+          where: { OR: [{ labOrderId: { in: labOrderIds } }, { invoiceId: { in: invoiceIds } }] },
+        })
+        await tx.labResultParameter.deleteMany({ where: { result: { labOrderId: { in: labOrderIds } } } })
         await tx.labResult.deleteMany({ where: { labOrderId: { in: labOrderIds } } })
         await tx.labReportAttachment.deleteMany({ where: { labOrderId: { in: labOrderIds } } })
         await tx.labOrder.deleteMany({ where: { id: { in: labOrderIds } } })
       }
       if (ultrasoundOrderIds.length) await tx.ultrasoundOrder.deleteMany({ where: { id: { in: ultrasoundOrderIds } } })
+      if (invoiceIds.length) {
+        await tx.payment.deleteMany({ where: { invoiceId: { in: invoiceIds } } })
+        await tx.invoiceItem.deleteMany({ where: { invoiceId: { in: invoiceIds } } })
+        await tx.discountAudit.deleteMany({ where: { invoiceId: { in: invoiceIds } } })
+        await tx.invoice.deleteMany({ where: { id: { in: invoiceIds } } })
+      }
+      if (patientIds.length) await tx.labLedgerAccount.deleteMany({ where: { patientId: { in: patientIds } } })
       if (consultationIds.length) await tx.consultationAddendum.deleteMany({ where: { consultationId: { in: consultationIds } } })
       if (consultationIds.length) await tx.consultation.deleteMany({ where: { id: { in: consultationIds } } })
       if (admissionIds.length) {
-        await tx.patientLedgerEntry.deleteMany({ where: { admissionId: { in: admissionIds } } })
         await tx.patientVitals.deleteMany({ where: { admissionId: { in: admissionIds } } })
         await tx.wardRound.deleteMany({ where: { admissionId: { in: admissionIds } } })
         await tx.nursingTask.deleteMany({ where: { admissionId: { in: admissionIds } } })
@@ -512,10 +551,21 @@ test("doctor-full-flow: queue, consultations, prescription, ward, OT, discharge,
       }
       if (appointmentIds.length) await tx.appointment.deleteMany({ where: { id: { in: appointmentIds } } })
       if (patientIds.length) await tx.patient.deleteMany({ where: { id: { in: patientIds } } })
-    }, { maxWait: 10_000, timeout: 60_000 })
-    for (const appointment of originalQueueStatuses) {
-      await prisma.appointment.update({ where: { id: appointment.id }, data: { status: appointment.status } })
+      }, { maxWait: 10_000, timeout: 60_000 })
+    } catch (error) {
+      cleanupError = error
     }
+
+    let restorationError: unknown
+    try {
+      for (const appointment of originalQueueStatuses) {
+        await prisma.appointment.update({ where: { id: appointment.id }, data: { status: appointment.status } })
+      }
+    } catch (error) {
+      restorationError = error
+    }
+    if (cleanupError) throw cleanupError
+    if (restorationError) throw restorationError
   }
 })
 

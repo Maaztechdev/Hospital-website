@@ -15,6 +15,7 @@ import { displayPakistaniPhone, formatBloodGroup, formatCurrency, formatDate, fo
 import { NotPermitted } from "@/dashboard/components/Layout"
 import { AdmitPatientModal } from "@/dashboard/pages/ward/AdmitPatientModal"
 import { AddAdmissionDepositModal } from "@/dashboard/components/ward/AddAdmissionDepositModal"
+import { IpdRunningBill } from "@/dashboard/pages/ward/IpdRunningBill"
 import { OT_STATUS_META } from "@/dashboard/pages/ot/otStatusMeta"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
@@ -124,8 +125,8 @@ export default function PatientProfile() {
   const patientAdmissions = profileData?.admissions ?? []
   const patientSurgeries = profileData?.surgeries ?? []
   const totalBilled = patientInvoices.reduce((sum, invoice) => sum + Number(invoice.grandTotal), 0)
-  const invoicePayments = patientInvoices.reduce((sum, invoice) => sum + invoice.payments.reduce((paid, payment) => paid + Number(payment.amount), 0), 0)
-  const advanceDeposits = (profileData?.ledgerEntries ?? []).reduce((sum, entry) => sum + Number(entry.amount), 0)
+  const invoicePayments = patientInvoices.reduce((sum, invoice) => sum + invoice.payments.reduce((paid, payment) => paid + (payment.type === "REFUND" ? -1 : 1) * Number(payment.amount), 0), 0)
+  const advanceDeposits = (profileData?.ledgerEntries ?? []).reduce((sum, entry) => sum + (entry.paymentId ? 0 : Number(entry.amount)), 0)
   const totalPaid = invoicePayments + advanceDeposits
   const balance = totalBilled - totalPaid
   const activeAdmission = profileData?.activeAdmission ?? null
@@ -137,7 +138,7 @@ export default function PatientProfile() {
     setStartingConsultation(true)
     try {
       const started = await api.startConsultation(eligibleAppointment.id)
-      dispatch({ type: "UPDATE_APPOINTMENT_STATUS", id: started.id, status: started.status })
+      dispatch({ type: "UPDATE_APPOINTMENT_STATUS", id: started.id, status: "In Consultation" })
       navigate(`/dashboard/doctor/consultation/${started.id}?mr=${encodeURIComponent(patient!.mrNumber)}`)
     } catch (cause) {
       setProfileError(cause instanceof Error ? cause.message : "Unable to start the selected appointment.")
@@ -308,6 +309,9 @@ export default function PatientProfile() {
                   <StatusBadge status={c.prescriptionStatus} />
                 </div>
                 <p className="mt-1 text-xs text-[var(--cp-ink-soft)]">Diagnosis: {c.diagnosis || "—"}</p>
+                {c.followUpDate && (
+                  <p className="mt-1 text-xs font-medium text-[var(--cp-primary)]">Follow-up: {formatDate(c.followUpDate)}{c.followUpInstructions ? ` — ${c.followUpInstructions}` : ""}</p>
+                )}
               </button>
             ))}
           </CardContent></Card>
@@ -315,16 +319,73 @@ export default function PatientProfile() {
 
         {tab === "Prescriptions" && (
           <Card><CardContent className="p-5">
-            {patientConsultations.flatMap((c) => c.prescriptions).length === 0 ? (
+            {((profileData?.prescriptions && profileData.prescriptions.length > 0)
+              ? profileData.prescriptions
+              : patientConsultations.flatMap((c) => c.prescriptions.map((p) => ({ ...p, consultation: c, doctor: p.doctor || c.doctor })))
+            ).length === 0 ? (
               <p className="text-sm text-[var(--cp-ink-soft)]">No prescriptions issued yet.</p>
-            ) : patientConsultations.map((c) => c.prescriptions.length > 0 && (
-              <div key={c.id} className="mb-3 rounded-lg border border-[var(--cp-border)] p-3 last:mb-0">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--cp-ink-faint)]">{formatDate(c.appointment.appointmentDate)} · {c.doctor.user.name} · <StatusBadge status={c.prescriptionStatus} /></p>
-                <ul className="flex flex-col gap-1 text-sm">
-                  {c.prescriptions.flatMap((prescription) => prescription.items.map((item) => <li key={item.id}>{item.medicineName} — {item.dosage ?? `${item.doseAmount ?? "—"} ${item.doseUnit ?? ""}`}, {item.frequency ?? item.frequencyCode ?? "—"}, {item.durationValue ?? item.durationDays ?? "—"} {item.durationUnit ?? "days"}</li>))}
-                </ul>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {((profileData?.prescriptions && profileData.prescriptions.length > 0)
+                  ? profileData.prescriptions
+                  : patientConsultations.flatMap((c) => c.prescriptions.map((p) => ({ ...p, consultation: c, doctor: p.doctor || c.doctor })))
+                ).map((rx) => {
+                  const doctorName = rx.doctor?.user?.name ?? rx.consultation?.doctor?.user?.name ?? "Doctor"
+                  const rxDate = rx.createdAt ?? rx.consultation?.appointment?.appointmentDate ?? new Date().toISOString()
+                  const followUpDate = rx.consultation?.followUpDate
+                  const followUpInstructions = rx.consultation?.followUpInstructions
+                  const printId = rx.consultationId ?? rx.id
+                  return (
+                    <div key={rx.id} className="rounded-lg border border-[var(--cp-border)] p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--cp-border-soft,#e2e8f0)] pb-2 mb-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--cp-ink)]">
+                            {formatDate(rxDate)} · Dr. {doctorName}
+                          </p>
+                          {rx.consultation?.appointment?.tokenNumber && (
+                            <span className="text-xs text-[var(--cp-ink-soft)]">Visit Token #{rx.consultation.appointment.tokenNumber}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={rx.status === "SIGNED" || rx.status === "COMPLETED" ? "Signed" : rx.status === "DISPENSED" ? "Dispensed" : "Draft"} />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              if (!openAuthenticatedPrintWindow(`/print/prescription/${printId}`)) {
+                                toast({ title: "Allow pop-ups to print", description: "Your browser blocked the prescription print page. Allow pop-ups and try again.", variant: "error" })
+                              }
+                            }}
+                          >
+                            <Printer className="h-3.5 w-3.5" /> Print
+                          </Button>
+                        </div>
+                      </div>
+
+                      {(followUpDate || followUpInstructions) && (
+                        <div className="mb-3 rounded-md bg-[var(--cp-primary-light)] p-2.5 text-xs text-[var(--cp-primary)]">
+                          <span className="font-semibold">Follow-up: </span>
+                          {followUpDate ? formatDate(followUpDate) : "As advised"}
+                          {followUpInstructions && <span className="block mt-0.5 text-[var(--cp-ink-soft)] font-normal">{followUpInstructions}</span>}
+                        </div>
+                      )}
+
+                      <ul className="flex flex-col gap-1.5 text-sm">
+                        {rx.items.map((item) => (
+                          <li key={item.id} className="flex flex-wrap items-center justify-between gap-1 rounded bg-[var(--cp-bg,#f8fafc)] px-2.5 py-1.5">
+                            <span className="font-medium text-[var(--cp-ink)]">{item.medicineName}</span>
+                            <span className="text-xs text-[var(--cp-ink-soft)]">
+                              {item.dosage ?? `${item.doseAmount ?? "—"} ${item.doseUnit ?? ""}`} · {item.frequencyCode ?? item.frequency ?? "—"} · {item.durationValue ?? item.durationDays ?? "—"} {item.durationUnit ?? "days"}
+                              {item.instructions ? ` · ${item.instructions}` : ""}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )
+                })}
               </div>
-            ))}
+            )}
           </CardContent></Card>
         )}
 
@@ -354,6 +415,7 @@ export default function PatientProfile() {
                   <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-semibold text-[var(--cp-ink)]">{scan.examType}</p><StatusBadge status={scan.status} /></div>
                   <p className="mt-1 text-xs text-[var(--cp-ink-soft)]">{formatDateTime(scan.createdAt)} · {scan.doctor?.user.name ?? "Ordering doctor"} · {scan.priority}</p>
                   {scan.impression && <p className="mt-2 text-sm text-[var(--cp-ink)]">{scan.impression}</p>}
+                  <a className="mt-2 inline-flex text-xs font-semibold text-[var(--cp-primary)] hover:underline" href={`/dashboard/ultrasound?orderId=${encodeURIComponent(scan.id)}`}>Open report / compare</a>
                 </li>)}
               </ul>
             )}
@@ -376,6 +438,8 @@ export default function PatientProfile() {
         )}
 
         {tab === "Billing" && (
+          <div className="flex flex-col gap-3">
+          {activeAdmission && !isLabTechnician && <IpdRunningBill admissionId={activeAdmission.id} />}
           <Card><CardContent className="p-5">
             {patientInvoices.length === 0 && profileData.ledgerEntries.length === 0 ? <p className="text-sm text-[var(--cp-ink-soft)]">No billing or payment records for this patient yet.</p> : (
               <ul className="flex flex-col gap-2">
@@ -384,7 +448,7 @@ export default function PatientProfile() {
                   <li key={inv.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--cp-border)] p-3 cursor-pointer hover:bg-[var(--cp-bg)]" onClick={() => navigate(`/dashboard/billing/${inv.id}`)}>
                     <div>
                       <p className="cp-tabular text-sm font-semibold text-[var(--cp-ink)]">{inv.invoiceNumber ?? "Invoice"}</p>
-                      <p className="text-xs text-[var(--cp-ink-soft)]">{formatDate(inv.createdAt)} · Paid {formatCurrency(inv.payments.reduce((sum, payment) => sum + Number(payment.amount), 0))} · Balance {formatCurrency(Number(inv.balanceAmount))}</p>
+                      <p className="text-xs text-[var(--cp-ink-soft)]">{formatDate(inv.createdAt)} · Paid {formatCurrency(inv.payments.reduce((sum, payment) => sum + (payment.type === "REFUND" ? -1 : 1) * Number(payment.amount), 0))} · Balance {formatCurrency(Number(inv.balanceAmount))}</p>
                     </div>
                     <StatusBadge status={inv.status} />
                   </li>
@@ -392,6 +456,7 @@ export default function PatientProfile() {
               </ul>
             )}
           </CardContent></Card>
+          </div>
         )}
 
         {tab === "Admissions" && (
@@ -415,7 +480,20 @@ export default function PatientProfile() {
                     <span>Deposit: <span className="cp-tabular font-semibold text-[var(--cp-ink)]">{formatCurrency(Number(a.depositAmount))}</span></span>
                     <span>Outstanding: <span className={cn("cp-tabular font-semibold", Number(a.outstandingBalance ?? 0) === 0 ? "text-[var(--cp-success)]" : "text-[var(--cp-warning)]")}>{formatCurrency(Number(a.outstandingBalance ?? 0))}</span></span>
                   </div>}
-                  {a.depositStatus === "PENDING" && canTakePayments && <Button size="sm" variant="outline" className="self-start" onClick={() => setDepositAdmission({ id: a.id, patientName: patient.name })}>Add deposit</Button>}
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" onClick={() => openAuthenticatedPrintWindow(`/print/admission/${a.id}`)}>
+                      <Printer className="h-3.5 w-3.5" /> Admission Slip
+                    </Button>
+                    {a.dischargeDate && (
+                      <Button size="sm" variant="outline" onClick={() => openAuthenticatedPrintWindow(`/print/discharge/${a.id}`)}>
+                        <Printer className="h-3.5 w-3.5" /> Discharge Summary
+                      </Button>
+                    )}
+                    {a.depositStatus === "PENDING" && canTakePayments && <Button size="sm" variant="outline" onClick={() => setDepositAdmission({ id: a.id, patientName: patient.name })}>Add deposit</Button>}
+                  </div>
+                  {!isLabTechnician && ["admin", "billing_manager", "receptionist", "doctor", "nurse"].includes(currentUser?.role ?? "") && (
+                    <IpdRunningBill admissionId={a.id} final={a.status === "DISCHARGED"} />
+                  )}
                 </CardContent></Card>
               ))
             )}
@@ -428,7 +506,14 @@ export default function PatientProfile() {
               <Card><CardContent className="p-5"><p className="text-sm text-[var(--cp-ink-soft)]">No OT / surgery records for this patient.</p></CardContent></Card>
             ) : (
               patientSurgeries.map((record) => {
-                const s = toSurgery(record)
+                const s = toSurgery({
+                  ...record,
+                  patient: record.patient ?? {
+                    firstName: profileData?.patient.firstName ?? "Unknown",
+                    lastName: profileData?.patient.lastName ?? "Patient",
+                    mrNumber: profileData?.patient.mrNumber,
+                  },
+                })
                 const meta = OT_STATUS_META[s.status]
                 return (
                   <Card key={s.id}><CardContent className="flex flex-col gap-2 p-5">

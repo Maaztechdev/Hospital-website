@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from "@playwright/test"
+import { ensureAvailableBeds } from "./test-helpers"
 
 const apiBase = process.env.PLAYWRIGHT_API_URL ?? "http://127.0.0.1:4000/api/v1"
 const users = {
@@ -18,8 +19,9 @@ async function login(request: APIRequestContext, user: keyof typeof users): Prom
 
 async function call(request: APIRequestContext, method: "get" | "post" | "patch", path: string, token: string, data?: unknown): Promise<any> {
   const response = await request[method](`${apiBase}${path}`, { headers: { Authorization: `Bearer ${token}` }, data })
-  expect(response.ok(), `${method.toUpperCase()} ${path} failed with ${response.status()}`).toBeTruthy()
-  return (await response.json() as Json).data
+  const body = await response.json() as Json
+  expect(response.ok(), `${method.toUpperCase()} ${path} failed with ${response.status()}: ${JSON.stringify(body)}`).toBeTruthy()
+  return body.data
 }
 
 test("patient lifecycle runs from registration through clinical, billing, lab, and ward care", async ({ request }) => {
@@ -43,7 +45,7 @@ test("patient lifecycle runs from registration through clinical, billing, lab, a
   const dateText = date.toISOString().slice(0, 10)
   const slots = await call(request, "get", `/appointments/doctors/${selectedDoctor.id}/slots?date=${dateText}`, receptionHeaders)
   const appointment = await call(request, "post", "/appointments", receptionHeaders, {
-    patientId: patient.id, doctorId: selectedDoctor.id, appointmentDate: dateText, timeSlot: slots.availableSlots[0], appointmentType: "NEW_VISIT", source: "WALK_IN",
+    patientId: patient.id, doctorId: selectedDoctor.id, appointmentDate: dateText, timeSlot: slots.availableSlots[0], appointmentType: "NEW_VISIT", source: "WALK_IN", feePaid: true,
   })
   expect(appointment.status).toBe("CONFIRMED")
   await call(request, "post", `/opd-queue/${appointment.id}/start-consultation`, doctor.accessToken)
@@ -58,19 +60,27 @@ test("patient lifecycle runs from registration through clinical, billing, lab, a
 
   const labTests = await call(request, "get", "/lab/tests", admin.accessToken)
   const labOrder = await call(request, "post", "/lab/orders", doctor.accessToken, { patientId: patient.id, doctorId: selectedDoctor.id, testId: labTests[0].id, priority: "ROUTINE" })
+  const labInvoice = await call(request, "get", `/billing/invoices/${labOrder.invoiceId}`, admin.accessToken)
+  await call(request, "post", `/billing/invoices/${labOrder.invoiceId}/payments`, admin.accessToken, {
+    paymentMethod: "CASH",
+    amount: Number(labInvoice.balanceAmount),
+  })
   await call(request, "patch", `/lab/orders/${labOrder.id}/sample-status`, admin.accessToken, { status: "SAMPLE_COLLECTED" })
   const labParameters = labTests[0].parameters ?? []
   const labResult = labParameters.length
     ? { parameters: labParameters.map((parameter: { id: string; resultType: string }) => ({ parameterId: parameter.id, value: parameter.resultType === "NUMERIC" ? "5.4" : "Observed" })) }
     : { resultValue: "Normal", interpretation: "NORMAL" as const }
-  await call(request, "post", `/lab/orders/${labOrder.id}/results`, admin.accessToken, labResult)
-  await call(request, "post", `/lab/orders/${labOrder.id}/verify`, admin.accessToken)
+  const savedLabResult = await call(request, "post", `/lab/orders/${labOrder.id}/results`, admin.accessToken, labResult)
+  await call(request, "post", `/lab/orders/${labOrder.id}/verify`, admin.accessToken, {
+    expectedUpdatedAt: savedLabResult.amendedAt || savedLabResult.createdAt,
+  })
 
   const invoice = await call(request, "post", "/billing/invoices", admin.accessToken, {
-    patientId: patient.id, items: [{ itemType: "CONSULTATION", description: "Lifecycle consultation", quantity: 1, unitPrice: 1500 }],
+    patientId: patient.id, department: "RECEPTION", items: [{ itemType: "CONSULTATION", description: "Lifecycle consultation", quantity: 1, unitPrice: 1500 }],
   })
   await call(request, "post", `/billing/invoices/${invoice.id}/payments`, admin.accessToken, { paymentMethod: "CASH", amount: 1500 })
 
+  await ensureAvailableBeds(request, { Authorization: `Bearer ${admin.accessToken}` }, 1)
   const beds = await call(request, "get", "/wards/beds/availability", admin.accessToken)
   const bed = beds.find((item: { status: string }) => item.status === "AVAILABLE")
   expect(bed).toBeTruthy()
@@ -78,11 +88,14 @@ test("patient lifecycle runs from registration through clinical, billing, lab, a
     patientId: patient.id, bedId: bed.id, attendingDoctorId: selectedDoctor.id, admissionType: "PLANNED", admissionReason: "Lifecycle observation", depositAmount: 1,
   })
   await call(request, "post", "/nursing/vitals", doctor.accessToken, { admissionId: admission.id, temperature: 37, pulse: 72, oxygenSaturation: 98 })
-  await call(request, "post", `/wards/admissions/${admission.id}/discharge`, doctor.accessToken, {
+  await call(request, "post", `/wards/admissions/${admission.id}/discharge`, admin.accessToken, {
     diagnosis: "Lifecycle observation",
     conditionAtDischarge: "Stable",
     instructions: "Return if symptoms worsen.",
+    confirmUnpaidBalance: true,
+    overrideReason: "Lifecycle test discharge",
   })
+  await call(request, "patch", `/wards/beds/${bed.id}/status`, admin.accessToken, { status: "AVAILABLE" })
 
   expect((await call(request, "get", `/patients/${patient.id}`, admin.accessToken)).id).toBe(patient.id)
 })

@@ -11,11 +11,13 @@ import { generateLabOrderNumber } from "@common/utils/sequenceGenerators";
 import { createLabInvoiceInTransaction } from "@modules/billing/billing.service";
 import { getApprovingAdminId, getCashierDiscountLimit } from "@modules/pharmacy/pharmacy.service";
 import { labSettingsSchema } from "./lab.validators";
-import type { createLabOrderSchema, createLabPackageOrderSchema, createLabTestSchema, labPackageSchema } from "./lab.validators";
+import type { createLabTestSchema, labPackageSchema } from "./lab.validators";
 import { applyLabCriticalThresholdDefaults, formatLabReferenceRange, interpretLabValue, resolveLabReferenceRange, type LabParameterInterpretation } from "./lab.resultUtils";
 import { canTransitionLabSampleStatus, canVerifyLabResult, isLabPaymentSatisfied } from "./lab.workflowUtils";
 import { consumeLabInventory } from "./labInventory.service";
 import { appendLabLedgerEntry } from "./labLedger.service";
+import { addIpdChargeInTransaction } from "@modules/ipd/ipdBilling.service";
+import { roundMoney } from "@common/utils/money";
 
 type LabTestInput = typeof createLabTestSchema._type;
 type LabPackageInput = typeof labPackageSchema._type;
@@ -28,6 +30,7 @@ type LabOrderBillingInput = {
   sampleType?: string;
   clinicalNotes?: string;
   consultationId?: string;
+  admissionId?: string;
   discountPercent?: number;
   discountReason?: string;
   referringClinicAccountId?: string;
@@ -42,6 +45,9 @@ type LabResultInput = {
   reportRemarks?: string;
   amendmentReason?: string;
   inventoryOverrideReason?: string;
+  expectedResultId?: string;
+  expectedCreatedAt?: string;
+  expectedUpdatedAt?: string;
 };
 
 const LAB_SAME_USER_VERIFICATION_SETTING = "lab.allow_same_user_enter_verify";
@@ -66,8 +72,9 @@ async function ensureLabPaymentBeforeCollection(tx: Prisma.TransactionClient, or
   const required = await requirePaymentBeforeCollection(tx);
   const order = await tx.labOrder.findUniqueOrThrow({
     where: { id: orderId },
-    select: { invoice: { select: { balanceAmount: true } } },
+    select: { admissionId: true, invoice: { select: { balanceAmount: true } } },
   });
+  if (order.admissionId) return;
   if (required && !order.invoice) {
     throw new ConflictError("Payment is required before sample collection, but this order has no linked invoice. Ask billing staff to review it.");
   }
@@ -220,6 +227,14 @@ async function createBilledLabOrders(
       throw new BadRequestError(selectedPackage ? "The selected Lab package has no active tests" : "Active Lab test not found");
     }
     if (!selectedPackage && !selectedTest) throw new NotFoundError("Active Lab test not found");
+    const admission = input.admissionId
+      ? await tx.admission.findFirst({ where: { id: input.admissionId, patientId: input.patientId, status: "ACTIVE" } })
+      : null;
+    if (input.admissionId && !admission) throw new ConflictError("The selected admission is not active for this patient.");
+    const ipdInvoice = admission
+      ? await tx.invoice.findUnique({ where: { admissionId: admission.id } })
+      : null;
+    if (admission && !ipdInvoice) throw new ConflictError("This admission has no IPD invoice.");
     const clinicAccount = input.referringClinicAccountId
       ? await tx.labLedgerAccount.findFirst({
         where: { id: input.referringClinicAccountId, type: "RECEIVABLE", partyType: "CLINIC" },
@@ -240,11 +255,25 @@ async function createBilledLabOrders(
       }
     }
 
-    const price = Number(selectedPackage?.price ?? selectedTests[0].price);
-    const invoice = await createLabInvoiceInTransaction(tx, {
+    const invoiceItems = selectedPackage
+      ? [{
+          description: `Lab package: ${selectedPackage.name}`,
+          unitPrice: Number(selectedPackage.price),
+          quantity: 1,
+          sourceType: "LAB_PACKAGE",
+          sourceId: selectedPackage.id,
+        }]
+      : selectedTests.map((t) => ({
+          description: t.testName,
+          unitPrice: Number(t.price),
+          quantity: 1,
+          sourceType: "LAB_TEST",
+          sourceId: t.id,
+        }));
+
+    const invoice = ipdInvoice ?? await createLabInvoiceInTransaction(tx, {
       patientId: input.patientId,
-      description: selectedPackage ? `Lab package: ${selectedPackage.name}` : selectedTests[0].testName,
-      unitPrice: price,
+      items: invoiceItems,
       discountPercent,
       discountReason: input.discountReason?.trim(),
       discountAppliedBy: discountPercent > 0 ? actor.sub : undefined,
@@ -252,27 +281,29 @@ async function createBilledLabOrders(
       labPackageId: selectedPackage?.id,
       createdBy: actor.sub,
     });
-    const receivableAccount = clinicAccount ?? await tx.labLedgerAccount.upsert({
-      where: { patientId: patient.id },
-      create: {
-        type: "RECEIVABLE",
-        partyType: "PATIENT",
-        patientId: patient.id,
-        partyName: `${patient.firstName} ${patient.lastName}`.trim(),
-        partyPhone: patient.phone,
-        createdBy: actor.sub,
-      },
-      update: {},
-    });
-    if (Number(invoice.balanceAmount) > 0) {
-      await appendLabLedgerEntry(tx, {
-        accountId: receivableAccount.id,
-        type: "INVOICE_CHARGE",
-        amount: Number(invoice.balanceAmount),
-        invoiceId: invoice.id,
-        notes: `Lab invoice ${invoice.invoiceNumber}`,
-        createdBy: actor.sub,
+    if (!admission) {
+      const receivableAccount = clinicAccount ?? await tx.labLedgerAccount.upsert({
+        where: { patientId: patient.id },
+        create: {
+          type: "RECEIVABLE",
+          partyType: "PATIENT",
+          patientId: patient.id,
+          partyName: `${patient.firstName} ${patient.lastName}`.trim(),
+          partyPhone: patient.phone,
+          createdBy: actor.sub,
+        },
+        update: {},
       });
+      if (Number(invoice.balanceAmount) > 0) {
+        await appendLabLedgerEntry(tx, {
+          accountId: receivableAccount.id,
+          type: "INVOICE_CHARGE",
+          amount: Number(invoice.balanceAmount),
+          invoiceId: invoice.id,
+          notes: `Lab invoice ${invoice.invoiceNumber}`,
+          createdBy: actor.sub,
+        });
+      }
     }
     const orders = [];
     for (const test of selectedTests) {
@@ -287,10 +318,28 @@ async function createBilledLabOrders(
           clinicalNotes: input.clinicalNotes,
           createdBy: actor.sub,
           consultationId: input.consultationId,
+          admissionId: admission?.id,
           invoiceId: invoice.id,
           referringClinicAccountId: clinicAccount?.id,
         },
       });
+      if (admission) {
+        const gross = selectedPackage
+          ? roundMoney(new Prisma.Decimal(selectedPackage.price).div(selectedTests.length))
+          : roundMoney(test.price);
+        const discount = roundMoney(gross.mul(discountPercent).div(100));
+        await addIpdChargeInTransaction(tx, {
+          admissionId: admission.id,
+          itemType: "LAB",
+          description: `Lab: ${test.testName}`,
+          amount: gross,
+          discount,
+          sourceType: "LAB_ORDER",
+          sourceId: created.id,
+          sourceDepartment: "LAB",
+          createdBy: actor.sub,
+        });
+      }
       if (test.isSendOut) {
         if (!test.referenceLabSupplierId || test.sendOutCost == null) {
           throw new BadRequestError(`Send-out test "${test.testName}" is missing its reference lab or outsourced cost.`);
@@ -337,15 +386,17 @@ async function createBilledLabOrders(
       }, tx);
       orders.push(created);
     }
-    await writeAuditLog({
-      userId: actor.sub,
-      action: "CREATE",
-      module: "billing",
-      entityType: "Invoice",
-      entityId: invoice.id,
-      newValues: invoice,
-      req,
-    }, tx);
+    if (!admission) {
+      await writeAuditLog({
+        userId: actor.sub,
+        action: "CREATE",
+        module: "billing",
+        entityType: "Invoice",
+        entityId: invoice.id,
+        newValues: invoice,
+        req,
+      }, tx);
+    }
     return { orders, invoice };
   });
   return result;
@@ -873,8 +924,14 @@ export const labService = {
             doctor: { include: { user: { select: { name: true } } } },
           },
         },
-        invoice: actor.role === "LAB_TECHNICIAN" ? false : {
-          select: { id: true, invoiceNumber: true, status: true, grandTotal: true, paidAmount: true, balanceAmount: true },
+        invoice: {
+          include: {
+            items: true,
+            payments: {
+              where: { deletedAt: null },
+              orderBy: { createdAt: "desc" },
+            },
+          },
         },
       },
     });
@@ -902,8 +959,27 @@ export const labService = {
         select: { name: true },
       })
       : null;
+
+    let populatedInvoice = order.invoice ? {
+      ...order.invoice,
+      payments: order.invoice.payments || [],
+    } : null;
+    if (populatedInvoice && populatedInvoice.payments.length > 0) {
+      const userIds = [...new Set(populatedInvoice.payments.map((p) => p.createdBy))];
+      const users = await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } });
+      const nameMap = new Map(users.map((u) => [u.id, u.name]));
+      populatedInvoice = {
+        ...populatedInvoice,
+        payments: populatedInvoice.payments.map((p) => ({
+          ...p,
+          receivedBy: nameMap.get(p.createdBy) ?? "Billing Staff",
+        })),
+      };
+    }
+
     return {
       ...order,
+      invoice: populatedInvoice,
       history,
       sampleRejections,
       technician: technician ? {
@@ -912,6 +988,112 @@ export const labService = {
       } : null,
       patientName: `${order.patient.firstName} ${order.patient.lastName}`.trim(),
     };
+  },
+
+  async generateOrderInvoice(
+    actor: AccessTokenPayload,
+    orderId: string,
+    input?: { discountPercent?: number; discountReason?: string },
+    req?: Request
+  ) {
+    const order = await prisma.labOrder.findUnique({
+      where: { id: orderId },
+      include: {
+        test: true,
+        patient: true,
+        invoice: {
+          include: {
+            items: true,
+            payments: { where: { deletedAt: null }, orderBy: { createdAt: "desc" } },
+          },
+        },
+      },
+    });
+    if (!order) throw new NotFoundError("Lab order not found");
+    if (order.invoice && order.invoice.status !== "VOID") {
+      return order.invoice;
+    }
+
+    const discountPercent = input?.discountPercent ?? 0;
+    let discountApprovedBy: string | undefined;
+    if (discountPercent > 0) {
+      if (!input?.discountReason?.trim()) throw new BadRequestError("A reason is required for a Lab discount");
+      const limit = await labDiscountLimit(prisma);
+      if (discountPercent > limit) {
+        discountApprovedBy = actor.role === "ADMIN"
+          ? actor.sub
+          : await getApprovingAdminId(req?.get("X-Discount-Approval-Token"), req?.get("X-Discount-Approval-Pin"));
+      }
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const invoice = await createLabInvoiceInTransaction(tx, {
+        patientId: order.patientId,
+        items: [{
+          description: order.test.testName,
+          unitPrice: Number(order.test.price),
+          quantity: 1,
+        }],
+        discountPercent,
+        discountReason: input?.discountReason?.trim(),
+        discountAppliedBy: discountPercent > 0 ? actor.sub : undefined,
+        discountApprovedBy,
+        createdBy: actor.sub,
+      });
+
+      await tx.labOrder.update({
+        where: { id: orderId },
+        data: { invoiceId: invoice.id },
+      });
+
+      const receivableAccount = await tx.labLedgerAccount.upsert({
+        where: { patientId: order.patient.id },
+        create: {
+          type: "RECEIVABLE",
+          partyType: "PATIENT",
+          patientId: order.patient.id,
+          partyName: `${order.patient.firstName} ${order.patient.lastName}`.trim(),
+          partyPhone: order.patient.phone,
+          createdBy: actor.sub,
+        },
+        update: {},
+      });
+
+      if (Number(invoice.balanceAmount) > 0) {
+        await appendLabLedgerEntry(tx, {
+          accountId: receivableAccount.id,
+          type: "INVOICE_CHARGE",
+          amount: Number(invoice.balanceAmount),
+          invoiceId: invoice.id,
+          notes: `Lab invoice ${invoice.invoiceNumber} for order ${order.orderNumber}`,
+          createdBy: actor.sub,
+        });
+      }
+
+      await writeAuditLog({
+        userId: actor.sub,
+        action: "UPDATE",
+        module: "lab",
+        entityType: "LabOrder",
+        entityId: order.id,
+        newValues: { invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber },
+        req,
+      }, tx);
+
+      await writeAuditLog({
+        userId: actor.sub,
+        action: "CREATE",
+        module: "billing",
+        entityType: "Invoice",
+        entityId: invoice.id,
+        newValues: invoice,
+        req,
+      }, tx);
+
+      return invoice;
+    });
+
+    return result;
   },
 
   async createOrder(actor: AccessTokenPayload, input: LabOrderBillingInput & { testId: string }, req?: Request) {
@@ -966,7 +1148,7 @@ export const labService = {
       });
       await writeAuditLog({ userId: actor.sub, action: "STATUS_CHANGE", module: "lab", entityType: "LabOrder", entityId: id, oldValues: { status: current.status }, newValues: { status: updated.status }, req }, tx);
       return updated;
-    });
+    }, { maxWait: 10000, timeout: 20000 });
   },
 
   async rejectSample(
@@ -1110,7 +1292,7 @@ export const labService = {
     if (amendmentMode && !["ADMIN", "PATHOLOGIST"].includes(actor.role)) {
       throw new ForbiddenError("Only an authorized pathologist may amend a verified report");
     }
-    if (amendmentMode ? order.status !== "VERIFIED" : !["PROCESSING", "COMPLETED"].includes(order.status)) {
+    if (amendmentMode ? order.status !== "VERIFIED" : !["SAMPLE_COLLECTED", "PROCESSING", "COMPLETED"].includes(order.status)) {
       throw new ConflictError(amendmentMode
         ? "Only a VERIFIED report can be amended"
         : `Cannot enter results while order status is ${order.status}`);
@@ -1215,7 +1397,7 @@ export const labService = {
         SELECT "status" FROM "lab_orders" WHERE "id" = ${id} FOR UPDATE
       `;
       const lockedStatus = lockedOrders[0]?.status;
-      if (amendmentMode ? lockedStatus !== "VERIFIED" : lockedStatus !== "PROCESSING" && lockedStatus !== "COMPLETED") {
+      if (amendmentMode ? lockedStatus !== "VERIFIED" : lockedStatus !== "SAMPLE_COLLECTED" && lockedStatus !== "PROCESSING" && lockedStatus !== "COMPLETED") {
         throw new ConflictError(amendmentMode
           ? "Only a VERIFIED report can be amended"
           : `Cannot enter results while order status is ${lockedStatus ?? "missing"}`);
@@ -1226,6 +1408,26 @@ export const labService = {
         orderBy: { createdAt: "desc" },
       });
       if (amendmentMode && !previous) throw new NotFoundError("No active result exists to amend");
+
+      if (previous) {
+        if (!input.expectedUpdatedAt && !input.expectedResultId) {
+          throw new BadRequestError("expectedUpdatedAt is required");
+        }
+        if (input.expectedResultId && previous.id !== input.expectedResultId) {
+          throw new ConflictError("This record was changed by another user, reload");
+        }
+        if (input.expectedCreatedAt) {
+          if (Math.abs(new Date(input.expectedCreatedAt).getTime() - new Date(previous.createdAt).getTime()) > 1000) {
+            throw new ConflictError("This record was changed by another user, reload");
+          }
+        }
+        if (input.expectedUpdatedAt) {
+          const prevTimestamp = (previous.amendedAt || previous.createdAt).getTime();
+          if (Math.abs(new Date(input.expectedUpdatedAt).getTime() - prevTimestamp) > 1000) {
+            throw new ConflictError("This record was changed by another user, reload");
+          }
+        }
+      }
       const created = await tx.labResult.create({
         data: {
           labOrderId: id,
@@ -1243,10 +1445,12 @@ export const labService = {
         },
         include: { parameters: true },
       });
-      await tx.labResult.updateMany({
-        where: { labOrderId: id, supersededById: null, ...(previous ? { id: previous.id } : {}) },
-        data: { supersededById: created.id },
-      });
+      if (previous) {
+        await tx.labResult.update({
+          where: { id: previous.id },
+          data: { supersededById: created.id },
+        });
+      }
       await tx.labOrder.update({
         where: { id },
         data: {
@@ -1276,6 +1480,11 @@ export const labService = {
               message: `${order.test.testName} for patient ${order.patient.firstName} ${order.patient.lastName} includes a critical parameter result.`,
               relatedEntityType: "LabOrder",
               relatedEntityId: id,
+              variables: {
+                testName: order.test.testName,
+                patientName: `${order.patient.firstName} ${order.patient.lastName}`.trim(),
+                orderNumber: order.orderNumber,
+              },
             },
             tx,
           );
@@ -1289,6 +1498,11 @@ export const labService = {
             message: `${order.test.testName} result ready for ${order.patient.firstName} ${order.patient.lastName}`,
             relatedEntityType: "LabOrder",
             relatedEntityId: id,
+            variables: {
+              testName: order.test.testName,
+              patientName: `${order.patient.firstName} ${order.patient.lastName}`.trim(),
+              orderNumber: order.orderNumber,
+            },
           },
           tx
         );
@@ -1322,7 +1536,7 @@ export const labService = {
     return labService.enterResult(actor, labOrderId, { ...resultInput, amendmentReason: reason }, req, true);
   },
 
-  async verify(actor: AccessTokenPayload, id: string, req?: Request) {
+  async verify(actor: AccessTokenPayload, id: string, req?: Request, expectedUpdatedAt?: string) {
     if (!["ADMIN", "PATHOLOGIST"].includes(actor.role)) {
       throw new ForbiddenError("Only an authorized pathologist may verify a lab result");
     }
@@ -1344,8 +1558,37 @@ export const labService = {
         orderBy: { createdAt: "desc" },
       });
       if (!result) throw new ConflictError("A saved result is required before verification");
+
+      if (!expectedUpdatedAt) {
+        throw new BadRequestError("expectedUpdatedAt is required");
+      }
+      const resultTimestamp = (result.amendedAt || result.createdAt).getTime();
+      if (Math.abs(new Date(expectedUpdatedAt).getTime() - resultTimestamp) > 1000) {
+        throw new ConflictError("This record was changed by another user, reload");
+      }
+
+      // Strictly block finalizing with missing required fields
+      if (order.testId) {
+        const test = await tx.labTest.findUnique({
+          where: { id: order.testId },
+          include: { parameters: true },
+        });
+        if (test?.parameters && test.parameters.length > 0) {
+          for (const param of test.parameters) {
+            const paramResult = result.parameters.find((p) => p.parameterId === param.id);
+            if (!paramResult || !paramResult.value || !paramResult.value.trim()) {
+              throw new BadRequestError(`Cannot finalize: parameter '${param.name}' is required`);
+            }
+          }
+        } else if (!result.resultValue || !result.resultValue.trim()) {
+          throw new BadRequestError("Cannot finalize: result value is required");
+        }
+      } else if (!result.resultValue || !result.resultValue.trim()) {
+        throw new BadRequestError("Cannot finalize: result value is required");
+      }
+
       const setting = await tx.setting.findUnique({ where: { key: LAB_SAME_USER_VERIFICATION_SETTING } });
-      if (!canVerifyLabResult(result.createdBy, actor.sub, setting?.value === true)) {
+      if (!canVerifyLabResult(result.createdBy, actor.sub, setting?.value === true, actor.role === "ADMIN")) {
         throw new ForbiddenError("A result author must be recorded and differ from the verifier");
       }
       const changed = await tx.labOrder.updateMany({

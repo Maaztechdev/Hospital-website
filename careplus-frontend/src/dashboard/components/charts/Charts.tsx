@@ -24,8 +24,8 @@ export function LineChartWidget({
     return { x, y, ...d }
   })
 
-  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ")
-  const areaPath = `${linePath} L ${points[points.length - 1]?.x ?? 0} ${padding.top + innerH} L ${padding.left} ${padding.top + innerH} Z`
+  const linePath = points.length ? points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ") : ""
+  const areaPath = points.length ? `${linePath} L ${points[points.length - 1]?.x ?? 0} ${padding.top + innerH} L ${padding.left} ${padding.top + innerH} Z` : ""
 
   const [hover, setHover] = React.useState<number | null>(null)
 

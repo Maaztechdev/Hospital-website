@@ -3,6 +3,7 @@ import { Response } from "express";
 interface Pagination {
   page: number;
   limit: number;
+  pageSize?: number;
   total: number;
 }
 

@@ -1,10 +1,11 @@
 import * as React from "react"
-import { X, User, Stethoscope, CalendarClock, ArrowRightLeft, LogOut, Wrench, Sparkles, CheckCircle2 } from "lucide-react"
+import { X, User, Stethoscope, CalendarClock, ArrowRightLeft, LogOut, Wrench, Sparkles, CheckCircle2, Printer } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import type { Bed } from "@/dashboard/types"
 import { BED_STATUS_META } from "@/dashboard/components/ward/BedTile"
-import { formatDateTime } from "@/dashboard/lib/format"
+import { formatCurrency, formatDateTime } from "@/dashboard/lib/format"
+import { api, openAuthenticatedPrintWindow, type ApiIpdRunningBill } from "@/lib/api"
 
 export function BedDetailDrawer({
   bed,
@@ -27,6 +28,9 @@ export function BedDetailDrawer({
   canTakePayments: boolean
   onAddDeposit: (bed: Bed) => void
 }) {
+  const [ipdBill, setIpdBill] = React.useState<ApiIpdRunningBill | null>(null)
+  const [ipdBillError, setIpdBillError] = React.useState("")
+
   React.useEffect(() => {
     if (!bed) return
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
@@ -37,6 +41,23 @@ export function BedDetailDrawer({
       document.body.style.overflow = ""
     }
   }, [bed, onClose])
+
+  React.useEffect(() => {
+    if (!bed?.admissionId || bed.status !== "Occupied") {
+      setIpdBill(null)
+      setIpdBillError("")
+      return
+    }
+    let active = true
+    setIpdBill(null)
+    setIpdBillError("")
+    api.getIpdRunningBill(bed.admissionId)
+      .then((result) => { if (active) setIpdBill(result) })
+      .catch((cause: unknown) => {
+        if (active) setIpdBillError(cause instanceof Error ? cause.message : "Unable to load bill status.")
+      })
+    return () => { active = false }
+  }, [bed?.admissionId, bed?.status])
 
   if (!bed) return null
   const meta = BED_STATUS_META[bed.status]
@@ -88,6 +109,22 @@ export function BedDetailDrawer({
               <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]"><Stethoscope className="h-4 w-4 text-[var(--cp-ink-faint)]" /> {bed.doctorName}</div>
               {bed.admittedAt && <div className="flex items-center gap-2 text-sm text-[var(--cp-ink)]"><CalendarClock className="h-4 w-4 text-[var(--cp-ink-faint)]" /> Admitted {formatDateTime(bed.admittedAt)}</div>}
               {bed.depositPending && <p className="inline-flex w-fit rounded-full bg-[var(--cp-warning-light)] px-2 py-1 text-xs font-semibold text-[var(--cp-warning)]">Deposit pending</p>}
+              {ipdBill && (
+                <div className="rounded-lg border border-[var(--cp-border)] bg-[var(--cp-surface)] p-3" aria-label="Read-only IPD bill status">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-[var(--cp-ink)]">IPD bill · {ipdBill.invoice.status}</p>
+                    <span className={cn("rounded-full px-2 py-1 text-[10px] font-semibold", Number(ipdBill.totals.balance) > 0 ? "bg-[var(--cp-warning-light)] text-[var(--cp-warning)]" : "bg-[var(--cp-success-light)] text-[var(--cp-success)]")}>
+                      {Number(ipdBill.totals.balance) > 0 ? "Balance due" : "Settled"}
+                    </span>
+                  </div>
+                  <dl className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+                    <div><dt className="text-[var(--cp-ink-soft)]">Charged</dt><dd className="cp-tabular font-medium">{formatCurrency(Number(ipdBill.totals.charged))}</dd></div>
+                    <div><dt className="text-[var(--cp-ink-soft)]">Paid</dt><dd className="cp-tabular font-medium">{formatCurrency(Number(ipdBill.totals.paid))}</dd></div>
+                    <div><dt className="text-[var(--cp-ink-soft)]">Balance</dt><dd className="cp-tabular font-medium">{formatCurrency(Number(ipdBill.totals.balance))}</dd></div>
+                  </dl>
+                </div>
+              )}
+              {ipdBillError && <p role="status" className="text-xs text-[var(--cp-ink-faint)]">IPD bill status unavailable: {ipdBillError}</p>}
             </div>
           ) : (
             <div className="mt-5 rounded-xl border border-dashed border-[var(--cp-border-strong)] p-4 text-center text-sm text-[var(--cp-ink-soft)]">
@@ -99,6 +136,11 @@ export function BedDetailDrawer({
         <div className="flex flex-col gap-2 border-t border-[var(--cp-border)] px-5 py-4">
           {bed.status === "Occupied" && (
             <>
+              {bed.admissionId && (
+                <Button size="sm" variant="outline" onClick={() => openAuthenticatedPrintWindow(`/print/admission/${bed.admissionId}`)}>
+                  <Printer className="h-4 w-4" /> Admission Slip
+                </Button>
+              )}
               {bed.depositPending && canTakePayments && <Button size="sm" variant="outline" onClick={() => onAddDeposit(bed)}>Add deposit</Button>}
               <Button size="sm" variant="outline" onClick={() => onTransfer(bed)}><ArrowRightLeft className="h-4 w-4" /> Transfer Patient</Button>
               <Button size="sm" variant="emergency" onClick={() => onDischarge(bed)}><LogOut className="h-4 w-4" /> Discharge Patient</Button>

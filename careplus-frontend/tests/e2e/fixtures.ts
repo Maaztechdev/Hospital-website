@@ -50,6 +50,7 @@ export async function createDoctorAppointment(request: APIRequestContext) {
       appointmentType: "CONSULTATION",
       source: "WALK_IN",
       reason: "Prescription consultation E2E",
+      feePaid: true,
     },
   })
   expect(appointmentResponse.ok(), await appointmentResponse.text()).toBeTruthy()

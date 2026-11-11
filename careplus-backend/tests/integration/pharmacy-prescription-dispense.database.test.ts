@@ -57,7 +57,7 @@ describe("pharmacy prescription dispensing", () => {
   it("uses FEFO, creates a linked invoice and movement history, and rejects repeat or over-quantity dispensing", async () => {
     const headers = { Authorization: `Bearer ${token}` };
     const user = await prisma.user.findUniqueOrThrow({ where: { email: "admin@careplus.local" }, select: { id: true, name: true } });
-    const patient = await prisma.patient.findFirstOrThrow({ where: { deletedAt: null }, select: { id: true, firstName: true, lastName: true, mrNumber: true } });
+    const patient = await prisma.patient.findFirstOrThrow({ where: { deletedAt: null }, select: { id: true, firstName: true, lastName: true, mrNumber: true, gender: true } });
     const doctor = await prisma.doctor.findFirstOrThrow({ where: { isAvailable: true }, select: { id: true, departmentId: true } });
 
     const medicineResponse = await request(app).post(`${api}/pharmacy/medicines`).set(headers).send({ name: `Rx dispense ${suffix}` });
@@ -91,6 +91,7 @@ describe("pharmacy prescription dispensing", () => {
         timeSlot: new Date("1970-01-01T09:00:00.000Z"),
         tokenNumber: (latestAppointment?.tokenNumber ?? 0) + 1,
         appointmentType: "CONSULTATION",
+        gender: patient.gender,
         status: "CONFIRMED",
         source: "WALK_IN",
         createdBy: user.id,

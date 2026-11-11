@@ -71,6 +71,7 @@ describe("Print document data and structured discharge summaries", () => {
       referral: "Cardiology clinic",
       instructions: "Return if symptoms worsen.",
       confirmUnpaidBalance: true,
+      overrideReason: "Authorized clinical discharge override with pending settlement",
     });
     expect(discharge.status).toBe(200);
     const saved = await prisma.admission.findUniqueOrThrow({ where: { id: fixture.admissionId } });
@@ -89,7 +90,7 @@ describe("Print document data and structured discharge summaries", () => {
     expect(dischargePrint.status).toBe(200);
     expect(dischargePrint.body.data).toMatchObject({
       admission: { id: fixture.admissionId, dischargeDetails: { diagnosis: "Print E2E diagnosis" } },
-      outstandingBalance: 100,
+      outstandingBalance: 5100,
     });
   });
 });
